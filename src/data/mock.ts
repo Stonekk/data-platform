@@ -13,16 +13,57 @@ export type ChartDataPoint = {
   value2?: number;
 };
 
-export type RequirementStatus = 'draft' | 'executing' | 'completed';
+export type RequirementStatus =
+  | 'draft'
+  | 'submitted'
+  | 'reviewing'
+  | 'approved'
+  | 'decomposed'
+  | 'executing'
+  | 'completed'
+  | 'closed'
+  | 'rejected'
+  | 'blocked';
 export type DataRequirementType = 'teleoperation' | 'human_body' | 'motion_capture';
+export type RequirementPriority = 'P0' | 'P1' | 'P2';
+export type RequirementTargetType = 'duration' | 'count';
+export type RequirementSceneType =
+  | 'home'
+  | 'business'
+  | 'factory'
+  | 'charging'
+  | 'public'
+  | 'other';
+export type RequirementDataPurpose = 'debug' | 'training';
+export type ApprovalDecision = 'pending' | 'approved' | 'rejected';
+
+export type ApprovalEvaluation = {
+  feasibility: 'pass' | 'warn' | 'fail';
+  cost: 'pass' | 'warn' | 'fail';
+  efficiency: 'pass' | 'warn' | 'fail';
+  resourceMatch: 'pass' | 'warn' | 'fail';
+};
+
+export type ApprovalRecord = {
+  level: 1 | 2;
+  nodeName: string;
+  approverRole: string;
+  approverName: string;
+  decision: ApprovalDecision;
+  evaluation?: ApprovalEvaluation;
+  opinion?: string;
+  actedAt?: string;
+};
 
 export type TaskStatus =
-  | 'pending'
+  | 'to_schedule'
   | 'scheduled'
+  | 'ready'
   | 'in_progress'
   | 'completed'
-  | 'cancelled'
-  | 'delayed';
+  | 'closed';
+
+export type TaskPriority = 'low' | 'medium' | 'high';
 
 export type DeviceStatus = 'available' | 'unavailable';
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'maintenance';
@@ -40,6 +81,10 @@ export type AnnotationTaskStatus = 'not-started' | 'in-progress' | 'completed';
 export type DatasetStatus = 'draft' | 'reviewing' | 'published' | 'deprecated';
 
 export type TransmissionState = 'synced' | 'syncing' | 'queued' | 'failed' | 'offline';
+
+export type IssueSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type IssueSource = 'task-workbench' | 'collection-app';
+export type IssueStatus = 'open' | 'processing' | 'resolved';
 
 // ---------------------------------------------------------------------------
 // 业务实体类型（用户指定 + 扩展）
@@ -101,6 +146,43 @@ export type Requirement = {
   deliveryDate: string;
   createdAt: string;
   description: string;
+
+  /** 画板要求：需求方（发起人） */
+  owner: string;
+  /** 画板要求：需求归属组（CU5 / CU6 / CU17…） */
+  requirementGroup: string;
+  /** 画板要求：P0/P1/P2，直接进入调度打分 */
+  priority: RequirementPriority;
+  /** 采集目标度量方式 */
+  targetType: RequirementTargetType;
+  /** 采集目标值，例如 "120 小时" / "20000 条" */
+  targetValue: string;
+  /** 业务场景类型（家庭/商务/工厂/充电等） */
+  sceneType?: RequirementSceneType;
+  /** 数据用途（调试/正式训练） */
+  dataPurpose?: RequirementDataPurpose;
+  /** 关键约束，最多 3 条（画板要求） */
+  keyRequirements: string[];
+  /** 设备要求细节（型号/版本/精度等） */
+  deviceRequirement: string;
+  /** 标注要求（粒度、标签体系、验收口径） */
+  annotationRequirement: string;
+  /** SOP 文档链接 */
+  sopLink?: string;
+  /** 标注规则链接 */
+  annotationRuleLink?: string;
+  /** 采集入口链接（Xlive / App） */
+  collectionEntryLink?: string;
+  /** 评审流程节点（按顺序） */
+  approvals: ApprovalRecord[];
+  /** 关联任务 ID 列表（进入执行后联动） */
+  linkedTaskIds: string[];
+  /** 自动计算的进度，0-100；系统维护，禁止人工编辑 */
+  progress: number;
+  /** 实际完成时间，自动回填 */
+  actualFinishAt?: string;
+  /** 驳回或阻塞原因（状态分支时展示） */
+  blockReason?: string;
 };
 
 export type TaskScriptStep = {
@@ -136,6 +218,18 @@ export type Task = {
   startTime: string;
   endTime: string;
   type: string;
+  /** 画板要求：任务 = 人 + 设备 + 事 + 场地，以下四组 ID 为 4 要素引用 */
+  personnelId?: string;
+  deviceId?: string;
+  sceneId?: string;
+  /** 关联台本 ID（"事"要素），对齐 mockTaskScripts[*].taskId */
+  scriptId?: string;
+  /** 关联需求，用于任务拆解溯源；缺失为"孤儿任务"（应补录） */
+  requirementId?: string;
+  /** 任务优先级，调度面板颜色与排序依据；默认继承需求优先级 */
+  priority?: TaskPriority;
+  /** 阻塞/延期原因，可选 */
+  blockReason?: string;
 };
 
 export type Device = {
@@ -146,6 +240,10 @@ export type Device = {
   healthStatus: HealthStatus;
   lastMaintenance: string;
   location: string;
+  /** 计划下次例行维护（YYYY-MM-DD） */
+  nextMaintenanceAt?: string;
+  /** 计划下次标定 / 校准（YYYY-MM-DD），动捕/可穿戴/感知类常用 */
+  nextCalibrationAt?: string;
 };
 
 export type PersonnelScheduleEntry = {
@@ -156,19 +254,34 @@ export type PersonnelScheduleEntry = {
   label: string;
 };
 
+/** 技能熟练度，用于资源池「技能矩阵」视图 */
+export type SkillProficiency = 1 | 2 | 3;
+
+export type PersonnelSkillRating = {
+  skill: string;
+  level: SkillProficiency;
+};
+
 export type Personnel = {
   id: string;
   name: string;
   role: string;
   status: PersonnelStatus;
   skills: string[];
+  /** 与 skills 对齐的等级：1 可用、2 熟练、3 专家；缺省可由前端按 2 展示 */
+  skillRatings?: PersonnelSkillRating[];
   schedule: PersonnelScheduleEntry[];
 };
 
 export type Scene = {
   id: string;
   name: string;
+  /** 场景类型（中间层）：零售物流、家庭服务等 */
   type: string;
+  /** 行业域（顶层）：画板「行业 → 场景类型 → 子类型」第一层 */
+  industry: string;
+  /** 子类型（最细）：具体布置或空间变体 */
+  sceneSubtype: string;
   status: SceneStatus;
   location: string;
   description: string;
@@ -234,6 +347,23 @@ export type MonitoringCharts = {
   taskCompletionTrend: ChartDataPoint[];
   deviceUtilizationTrend: ChartDataPoint[];
   anomalyStatistics: ChartDataPoint[];
+};
+
+export type IssueReport = {
+  id: string;
+  source: IssueSource;
+  status: IssueStatus;
+  severity: IssueSeverity;
+  title: string;
+  description: string;
+  /** 可选：关联任务 */
+  taskId?: string;
+  /** 可选：关联需求 */
+  requirementId?: string;
+  /** 可选：关联采集会话 */
+  sessionId?: string;
+  reporter: string;
+  reportedAt: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -328,11 +458,48 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-15',
     createdAt: '2025-03-01T10:00:00+08:00',
     description: '覆盖开抽屉、倾倒、叠毛巾等长序列操作，需同步腕部力矩与第三视角视频。',
+    owner: '张宇航',
+    requirementGroup: 'CU6-家庭服务',
+    priority: 'P0',
+    targetType: 'duration',
+    targetValue: '120 小时',
+    keyRequirements: [
+      '力矩同步误差 < 5ms',
+      '第三视角需覆盖抓取瞬间无遮挡',
+      '长序列单段 ≥ 3 分钟',
+    ],
+    deviceRequirement: '双臂遥操作台 A1（主站软件 v2.4+），含腕部六维力传感器',
+    annotationRequirement: '按操作语义分段（开-取-放-归位），标签体系对齐 v1.2',
+    sopLink: 'https://sop.example.com/kitchen-teleop-v2',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '设备与场景均就绪，建议列入本周排期。',
+        actedAt: '2025-03-02T09:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '批准进入拆解，优先级 P0。',
+        actedAt: '2025-03-02T15:20:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-001'],
+    progress: 42,
   },
   {
     id: 'req-002',
     title: '工业拧螺丝人体工效数据',
-    status: 'draft',
+    status: 'reviewing',
     dataType: 'human_body',
     scene: '装配工位线体',
     device: '可穿戴惯性套装 W1',
@@ -340,6 +507,40 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-28',
     createdAt: '2025-03-18T14:30:00+08:00',
     description: '采集肩肘腕角度与肌电参考，用于人机协作安全阈值建模。',
+    owner: '王立',
+    requirementGroup: 'CU17-工业协作',
+    priority: 'P1',
+    targetType: 'count',
+    targetValue: '8,000 条',
+    keyRequirements: [
+      '覆盖 ≥ 3 种扭矩档位',
+      '受试者至少 6 人、男女均衡',
+      '肌电采样率 ≥ 1kHz',
+    ],
+    deviceRequirement: '可穿戴惯性套装 W1 × 2 套 + 肌电参考贴片',
+    annotationRequirement: '关节角度区间标签 + 疲劳粗标签，复用 ann-006 规范',
+    sopLink: 'https://sop.example.com/assembly-human-ergonomics',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'warn', resourceMatch: 'pass' },
+        opinion: '受试者招募周期较长，建议同步启动。',
+        actedAt: '2025-03-19T11:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'pending',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
   },
   {
     id: 'req-003',
@@ -352,6 +553,44 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-03-20',
     createdAt: '2025-02-10T09:00:00+08:00',
     description: 'SKU 取放、推车转向、低位拾取三类动作，已完成对齐与初剪。',
+    owner: '李静',
+    requirementGroup: 'CU5-零售物流',
+    priority: 'P0',
+    targetType: 'duration',
+    targetValue: '80 小时',
+    keyRequirements: [
+      '标杆动作 SKU 覆盖 ≥ 200',
+      '骨骼点位丢失率 < 1%',
+      '三类动作每类样本 ≥ 500',
+    ],
+    deviceRequirement: '动捕套装 M3（24 相机标定通过）',
+    annotationRequirement: '骨骼关键点 + 货位 SKU 框',
+    sopLink: 'https://sop.example.com/retail-pickup-mocap',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '标杆项目，设备场景均就绪。',
+        actedAt: '2025-02-11T09:30:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '批准交付，优先级 P0。',
+        actedAt: '2025-02-11T14:10:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-002'],
+    progress: 100,
+    actualFinishAt: '2025-03-19T18:00:00+08:00',
   },
   {
     id: 'req-004',
@@ -364,6 +603,43 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-05',
     createdAt: '2025-03-12T11:20:00+08:00',
     description: '不同门槛高度与材质，记录足端压力与全身关节轨迹。',
+    owner: '刘桓',
+    requirementGroup: 'CU8-移动机器人',
+    priority: 'P0',
+    targetType: 'count',
+    targetValue: '4,500 条',
+    keyRequirements: [
+      '门槛覆盖高度 5~20cm，≥ 4 档',
+      '失败样本（受控）占比 ≥ 10%',
+      '足端压力采样率 ≥ 500Hz',
+    ],
+    deviceRequirement: '人形机器人 H2（健康状态 warning 以上可上岗）+ 安全员 1 名',
+    annotationRequirement: '动作分段 + 失败原因标签（ann-003 规范）',
+    sopLink: 'https://sop.example.com/humanoid-threshold',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'warn' },
+        opinion: '需要安全员协同，排期避开早高峰。',
+        actedAt: '2025-03-13T10:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '批准执行。',
+        actedAt: '2025-03-13T16:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-003'],
+    progress: 28,
   },
   {
     id: 'req-005',
@@ -376,6 +652,35 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-05-10',
     createdAt: '2025-03-22T16:00:00+08:00',
     description: '坐站转移、平行杠内步态，需与理疗师口令时间轴对齐。',
+    owner: '陈悦',
+    requirementGroup: 'CU11-医疗康复',
+    priority: 'P2',
+    targetType: 'duration',
+    targetValue: '60 小时',
+    keyRequirements: [
+      '受试者需签署伦理同意',
+      '理疗师口令需转写为时间轴',
+    ],
+    deviceRequirement: '柔性传感衣 S2',
+    annotationRequirement: '步态分段 + 口令对齐标签',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'pending',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'pending',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
   },
   {
     id: 'req-006',
@@ -388,11 +693,49 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-22',
     createdAt: '2025-03-05T08:45:00+08:00',
     description: '两名操作员与两台 AGV 的时间同步标定与遮挡补帧方案已锁定。',
+    owner: '周仁',
+    requirementGroup: 'CU5-零售物流',
+    priority: 'P1',
+    targetType: 'count',
+    targetValue: '3,200 条',
+    keyRequirements: [
+      '双机时间同步误差 < 20ms',
+      '遮挡补帧不超过 10%',
+      '协同节点动作打点齐全',
+    ],
+    deviceRequirement: '动捕套装 M3 + 移动底盘 C1（需双机联调完成）',
+    annotationRequirement: '角色交互关系标注（ann-007 规范）',
+    sopLink: 'https://sop.example.com/dual-robot-coop',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'warn', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '双机协同成本偏高，但场景价值高。',
+        actedAt: '2025-03-06T10:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '批准，按 P1 排期。',
+        actedAt: '2025-03-06T17:30:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-005'],
+    progress: 15,
+    blockReason: 'task-005 延期，AGV 定位跳变待修复',
   },
   {
     id: 'req-007',
     title: '精密插拔遥操作（电子）',
-    status: 'completed',
+    status: 'closed',
     dataType: 'teleoperation',
     scene: '防静电工作台',
     device: '双臂遥操作台 A2',
@@ -400,11 +743,47 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-03-18',
     createdAt: '2025-02-28T13:10:00+08:00',
     description: 'FPC 插拔、螺丝微扭力，含高帧指尖触觉。',
+    owner: '郑行',
+    requirementGroup: 'CU17-工业协作',
+    priority: 'P1',
+    targetType: 'count',
+    targetValue: '2,000 条',
+    keyRequirements: [
+      '指尖触觉 ≥ 1kHz 采样',
+      '微米级结果判定',
+      '静电防护合规',
+    ],
+    deviceRequirement: '双臂遥操作台 A2 + 微米级显微工位',
+    annotationRequirement: '微米级结果判定（ann-010 规范）',
+    sopLink: 'https://sop.example.com/precision-fpc',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-01T09:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-01T14:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-006'],
+    progress: 100,
+    actualFinishAt: '2025-03-18T12:00:00+08:00',
   },
   {
     id: 'req-008',
     title: '拥挤人群穿行人体流场',
-    status: 'draft',
+    status: 'rejected',
     dataType: 'human_body',
     scene: '交通枢纽大厅',
     device: '多相机阵列 + W1',
@@ -412,11 +791,48 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-06-01',
     createdAt: '2025-03-24T09:30:00+08:00',
     description: '匿名化行人轨迹与局部避让意图标注需求评审中。',
+    owner: '吴梓',
+    requirementGroup: 'CU9-公共场景',
+    priority: 'P2',
+    targetType: 'duration',
+    targetValue: '200 小时',
+    keyRequirements: [
+      '隐私合规脱敏',
+      '多机位同步',
+      '高峰/平峰时段均需覆盖',
+    ],
+    deviceRequirement: '多相机阵列 + W1',
+    annotationRequirement: '轨迹匿名化抽检（ann-005 规范）',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'warn', cost: 'warn', efficiency: 'warn', resourceMatch: 'fail' },
+        opinion: '合作场地审批未通过，场景 inactive 中。',
+        actedAt: '2025-03-24T18:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'rejected',
+        evaluation: { feasibility: 'warn', cost: 'warn', efficiency: 'warn', resourceMatch: 'fail' },
+        opinion: '场景尚未开放采集，驳回；待场地合作完成后重新提交。',
+        actedAt: '2025-03-25T10:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
+    blockReason: '场景 scene-008 尚未审批通过，无法开展采集',
   },
   {
     id: 'req-009',
     title: '乒乓球对打动捕',
-    status: 'executing',
+    status: 'blocked',
     dataType: 'motion_capture',
     scene: '体育馆多功能场地',
     device: '动捕套装 M3',
@@ -424,6 +840,42 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-12',
     createdAt: '2025-03-14T10:00:00+08:00',
     description: '高速挥拍与重心转移，200Hz 骨骼数据。',
+    owner: '张宇航',
+    requirementGroup: 'CU13-体育训练',
+    priority: 'P1',
+    targetType: 'duration',
+    targetValue: '40 小时',
+    keyRequirements: [
+      '骨骼采样率 ≥ 200Hz',
+      '击球事件点标注',
+      '高速模糊场景需补拍方案',
+    ],
+    deviceRequirement: '动捕套装 M3（高速模式）',
+    annotationRequirement: '击球事件点标注（ann-004 规范）',
+    sopLink: 'https://sop.example.com/tabletennis-mocap',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-14T16:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-15T09:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-007'],
+    progress: 48,
+    blockReason: '高速模糊导致自动关键点失败，质检打回补拍（qa-004）',
   },
   {
     id: 'req-010',
@@ -436,11 +888,47 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-03-10',
     createdAt: '2025-02-01T08:00:00+08:00',
     description: '湿度变化下的手套触觉漂移记录已完成质检验收。',
+    owner: '孙墨',
+    requirementGroup: 'CU14-农业',
+    priority: 'P2',
+    targetType: 'count',
+    targetValue: '1,500 条',
+    keyRequirements: [
+      '湿度变化梯度覆盖',
+      '户外设备每日烘干',
+      '触觉漂移可溯源',
+    ],
+    deviceRequirement: '移动机械臂 R1（大棚改装套件）',
+    annotationRequirement: '工具接触状态（ann-008 规范）',
+    sopLink: 'https://sop.example.com/agri-teleop',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-02-02T09:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-02-02T15:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-009'],
+    progress: 100,
+    actualFinishAt: '2025-03-09T17:00:00+08:00',
   },
   {
     id: 'req-011',
     title: '电梯内外人体进出',
-    status: 'executing',
+    status: 'decomposed',
     dataType: 'human_body',
     scene: '写字楼电梯厅',
     device: '深度相机 + W1',
@@ -448,11 +936,47 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-04-30',
     createdAt: '2025-03-19T15:00:00+08:00',
     description: '高峰/平峰时段客流，关注门区让行行为。',
+    owner: '李静',
+    requirementGroup: 'CU9-公共场景',
+    priority: 'P1',
+    targetType: 'duration',
+    targetValue: '50 小时',
+    keyRequirements: [
+      '匿名化脱敏合规',
+      '高峰/平峰各 ≥ 20 小时',
+      '门区让行行为事件标签',
+    ],
+    deviceRequirement: '深度相机阵列 D4 + W1',
+    annotationRequirement: '轨迹匿名化抽检 + 门区让行事件',
+    sopLink: 'https://sop.example.com/elevator-human-flow',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '需与物业协同约定高峰时段。',
+        actedAt: '2025-03-20T10:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-20T16:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: ['task-010'],
+    progress: 0,
   },
   {
     id: 'req-012',
     title: '舞蹈基础动作动捕教材',
-    status: 'draft',
+    status: 'submitted',
     dataType: 'motion_capture',
     scene: '舞蹈排练厅',
     device: '动捕套装 M2',
@@ -460,6 +984,167 @@ export const mockRequirements: Requirement[] = [
     deliveryDate: '2025-05-20',
     createdAt: '2025-03-25T11:40:00+08:00',
     description: '面向青少年课程的标准动作分段与节拍对齐。',
+    owner: '陈悦',
+    requirementGroup: 'CU12-文娱教育',
+    priority: 'P2',
+    targetType: 'duration',
+    targetValue: '30 小时',
+    keyRequirements: [
+      '节拍对齐误差 < 30ms',
+      '标准动作分段颗粒度与教材一致',
+    ],
+    deviceRequirement: '动捕套装 M2（维护中，需等待上线）',
+    annotationRequirement: '节拍对齐质检（ann-009 规范）',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'pending',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'pending',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
+  },
+  {
+    id: 'req-013',
+    title: '充电站插枪遥操作（雨天工况）',
+    status: 'approved',
+    dataType: 'teleoperation',
+    scene: '充电站雨棚试验区',
+    device: '双臂遥操作台 A1',
+    dataVolume: '约 640 GB',
+    deliveryDate: '2025-05-08',
+    createdAt: '2025-03-26T09:15:00+08:00',
+    description: '湿手/手套两种握持，插拔力曲线与视觉对齐；待拆解为采集单元与标定窗口。',
+    owner: '刘桓',
+    requirementGroup: 'CU8-移动机器人',
+    priority: 'P1',
+    targetType: 'count',
+    targetValue: '2,400 条',
+    keyRequirements: ['雨天工况与干燥基线各半', '插拔峰值力记录完整', '安全联锁全程录像'],
+    deviceRequirement: '双臂遥操作台 A1 + 防水工位改造套件',
+    annotationRequirement: '插拔阶段分段 + 失败类型（ann-011 草案）',
+    sopLink: 'https://sop.example.com/ev-charge-rain-teleop',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '雨棚档期已锁，可进入拆解排期。',
+        actedAt: '2025-03-26T10:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '批准，拆解后走任务调度。',
+        actedAt: '2025-03-26T14:30:00+08:00',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
+  },
+  {
+    id: 'req-014',
+    title: '家庭餐桌收拾动捕（多餐具碰撞）',
+    status: 'approved',
+    dataType: 'motion_capture',
+    scene: '家庭厨房标准间',
+    device: '动捕套装 M3',
+    dataVolume: '约 1.2 TB',
+    deliveryDate: '2025-05-18',
+    createdAt: '2025-03-27T11:00:00+08:00',
+    description: '叠盘、收杯、擦桌三类子任务，需拆解为人时窗与场景占用。',
+    owner: '张宇航',
+    requirementGroup: 'CU6-家庭服务',
+    priority: 'P0',
+    targetType: 'duration',
+    targetValue: '36 小时',
+    keyRequirements: ['餐具碰撞声学与骨骼同步', '第三视角无遮挡', '每类子任务 ≥ 8 小时'],
+    deviceRequirement: '动捕套装 M3（24 机位标定在有效期内）',
+    annotationRequirement: '子任务边界 + 碰撞事件点',
+    sopLink: 'https://sop.example.com/dining-cleanup-mocap',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-27T14:00:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: 'P0，拆解优先。',
+        actedAt: '2025-03-27T16:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
+  },
+  {
+    id: 'req-015',
+    title: '仓储高位货架人体攀爬姿态（安全绳）',
+    status: 'approved',
+    dataType: 'human_body',
+    scene: '仓储分拣区',
+    device: '可穿戴惯性套装 W1',
+    dataVolume: '约 520 GB',
+    deliveryDate: '2025-06-02',
+    createdAt: '2025-03-28T08:20:00+08:00',
+    description: '攀爬、够取、回身三类姿态，安全员在场；待拆解为受试批次与单次时长单元。',
+    owner: '周仁',
+    requirementGroup: 'CU5-零售物流',
+    priority: 'P2',
+    targetType: 'count',
+    targetValue: '5,000 条',
+    keyRequirements: ['安全绳姿态不打点丢失', '高位 ≥ 2.4m 样本占比 ≥ 25%', '受试者体检证明在有效期内'],
+    deviceRequirement: '可穿戴惯性套装 W1 × 3 + 安全员双人岗',
+    annotationRequirement: '姿态粗分段 + 疲劳自评量表对齐',
+    approvals: [
+      {
+        level: 1,
+        nodeName: '初审 · 可行性与资源',
+        approverRole: '采集运营',
+        approverName: '许明哲',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'warn', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '安全预案已备案。',
+        actedAt: '2025-03-28T10:30:00+08:00',
+      },
+      {
+        level: 2,
+        nodeName: '终审 · 需求批复',
+        approverRole: '采集运营 Leader',
+        approverName: '胡明宇',
+        decision: 'approved',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        actedAt: '2025-03-28T15:00:00+08:00',
+      },
+    ],
+    linkedTaskIds: [],
+    progress: 0,
   },
 ];
 
@@ -477,6 +1162,12 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-26T09:00:00+08:00',
     endTime: '2025-03-26T12:00:00+08:00',
     type: '遥操作采集',
+    requirementId: 'req-001',
+    personnelId: 'per-001',
+    deviceId: 'dev-001',
+    sceneId: 'scene-001',
+    scriptId: 'task-001',
+    priority: 'high',
   },
   {
     id: 'task-002',
@@ -487,6 +1178,11 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-25T14:00:00+08:00',
     endTime: '2025-03-25T18:30:00+08:00',
     type: '动捕采集',
+    requirementId: 'req-003',
+    personnelId: 'per-002',
+    deviceId: 'dev-004',
+    sceneId: 'scene-003',
+    priority: 'high',
   },
   {
     id: 'task-003',
@@ -497,26 +1193,43 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-26T13:30:00+08:00',
     endTime: '2025-03-26T17:00:00+08:00',
     type: '遥操作采集',
+    requirementId: 'req-004',
+    personnelId: 'per-003',
+    deviceId: 'dev-006',
+    sceneId: 'scene-004',
+    scriptId: 'task-003',
+    priority: 'high',
   },
   {
     id: 'task-004',
     device: '可穿戴惯性套装 W1',
     personnel: '周若彤',
     scene: '装配工位线体',
-    status: 'pending',
+    status: 'to_schedule',
     startTime: '2025-03-27T08:30:00+08:00',
     endTime: '2025-03-27T11:30:00+08:00',
     type: '人体数据采集',
+    personnelId: 'per-004',
+    deviceId: 'dev-007',
+    sceneId: 'scene-002',
+    priority: 'medium',
+    blockReason: '孤儿任务：未关联明确需求，需补录',
   },
   {
     id: 'task-005',
     device: '移动底盘 C1',
     personnel: '韩博文',
     scene: '仓储分拣区',
-    status: 'delayed',
+    status: 'to_schedule',
     startTime: '2025-03-25T10:00:00+08:00',
     endTime: '2025-03-25T16:00:00+08:00',
     type: '协同调度测试',
+    requirementId: 'req-006',
+    personnelId: 'per-005',
+    deviceId: 'dev-008',
+    sceneId: 'scene-006',
+    priority: 'medium',
+    blockReason: 'AGV 定位跳变导致会话中止，待修复后重排',
   },
   {
     id: 'task-006',
@@ -527,6 +1240,11 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-24T09:00:00+08:00',
     endTime: '2025-03-24T15:00:00+08:00',
     type: '遥操作采集',
+    requirementId: 'req-007',
+    personnelId: 'per-006',
+    deviceId: 'dev-002',
+    sceneId: 'scene-007',
+    priority: 'medium',
   },
   {
     id: 'task-007',
@@ -537,16 +1255,28 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-26T08:00:00+08:00',
     endTime: '2025-03-26T11:00:00+08:00',
     type: '动捕采集',
+    requirementId: 'req-009',
+    personnelId: 'per-002',
+    deviceId: 'dev-004',
+    sceneId: 'scene-009',
+    scriptId: 'task-007',
+    priority: 'medium',
+    blockReason: 'qa-004 打回：高速模糊自动关键点失败，待补拍方案',
   },
   {
     id: 'task-008',
     device: '柔性传感衣 S2',
     personnel: '何雨桐',
     scene: '康复训练室',
-    status: 'cancelled',
+    status: 'closed',
     startTime: '2025-03-26T10:00:00+08:00',
     endTime: '2025-03-26T12:00:00+08:00',
     type: '人体数据采集',
+    personnelId: 'per-007',
+    deviceId: 'dev-005',
+    sceneId: 'scene-005',
+    priority: 'low',
+    blockReason: '场景 scene-005 维护中，任务取消',
   },
   {
     id: 'task-009',
@@ -557,6 +1287,11 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-22T07:00:00+08:00',
     endTime: '2025-03-22T12:00:00+08:00',
     type: '遥操作采集',
+    requirementId: 'req-010',
+    personnelId: 'per-008',
+    deviceId: 'dev-009',
+    sceneId: 'scene-010',
+    priority: 'low',
   },
   {
     id: 'task-010',
@@ -567,26 +1302,41 @@ export const mockTasks: Task[] = [
     startTime: '2025-03-27T17:00:00+08:00',
     endTime: '2025-03-27T19:30:00+08:00',
     type: '人体数据采集',
+    requirementId: 'req-011',
+    personnelId: 'per-009',
+    deviceId: 'dev-010',
+    sceneId: 'scene-011',
+    priority: 'medium',
   },
   {
     id: 'task-011',
     device: '动捕套装 M2',
     personnel: '罗嘉诚',
     scene: '舞蹈排练厅',
-    status: 'pending',
+    status: 'to_schedule',
     startTime: '2025-03-28T14:00:00+08:00',
     endTime: '2025-03-28T18:00:00+08:00',
     type: '动捕采集',
+    personnelId: 'per-010',
+    deviceId: 'dev-003',
+    sceneId: 'scene-012',
+    priority: 'low',
+    blockReason: '设备 M2 维护中，装置未就绪',
   },
   {
     id: 'task-012',
     device: '多相机阵列 + W1',
     personnel: '许明哲',
     scene: '交通枢纽大厅',
-    status: 'pending',
+    status: 'to_schedule',
     startTime: '2025-04-01T09:00:00+08:00',
     endTime: '2025-04-01T18:00:00+08:00',
     type: '人体数据采集',
+    personnelId: 'per-011',
+    deviceId: 'dev-007',
+    sceneId: 'scene-008',
+    priority: 'low',
+    blockReason: '场景 scene-008 尚未开放，需求 req-008 已驳回',
   },
 ];
 
@@ -648,18 +1398,18 @@ export const mockTaskScripts: TaskScript[] = [
 // ---------------------------------------------------------------------------
 
 export const mockDevices: Device[] = [
-  { id: 'dev-001', name: '双臂遥操作台 A1', type: '遥操作主站', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-10', location: '实验室 A 区' },
-  { id: 'dev-002', name: '双臂遥操作台 A2', type: '遥操作主站', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-02-28', location: '实验室 A 区' },
-  { id: 'dev-003', name: '动捕套装 M2', type: '光学动捕', status: 'unavailable', healthStatus: 'maintenance', lastMaintenance: '2025-03-25', location: '动捕棚 1' },
-  { id: 'dev-004', name: '动捕套装 M3', type: '光学动捕', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-18', location: '动捕棚 2' },
-  { id: 'dev-005', name: '柔性传感衣 S2', type: '可穿戴', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-20', location: '康复场景配套间' },
-  { id: 'dev-006', name: '人形机器人 H2', type: '人形机器人', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-03-22', location: '过渡区测试道' },
-  { id: 'dev-007', name: '可穿戴惯性套装 W1', type: '可穿戴', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-15', location: '人体数据工位' },
-  { id: 'dev-008', name: '移动底盘 C1', type: 'AGV', status: 'unavailable', healthStatus: 'critical', lastMaintenance: '2025-03-24', location: '仓储分拣区' },
-  { id: 'dev-009', name: '移动机械臂 R1', type: '移动操纵', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-08', location: '农业示范大棚' },
-  { id: 'dev-010', name: '深度相机阵列 D4', type: '感知套件', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-12', location: '电梯厅布设点' },
-  { id: 'dev-011', name: '边缘采集网关 G2', type: '网络设备', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-01', location: '机房机柜 R3' },
-  { id: 'dev-012', name: '备份磁带库 T1', type: '存储', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-02-15', location: '异地灾备中心' },
+  { id: 'dev-001', name: '双臂遥操作台 A1', type: '遥操作主站', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-10', nextMaintenanceAt: '2025-04-10', nextCalibrationAt: '2025-04-05', location: '实验室 A 区' },
+  { id: 'dev-002', name: '双臂遥操作台 A2', type: '遥操作主站', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-02-28', nextMaintenanceAt: '2025-03-30', nextCalibrationAt: '2025-03-28', location: '实验室 A 区' },
+  { id: 'dev-003', name: '动捕套装 M2', type: '光学动捕', status: 'unavailable', healthStatus: 'maintenance', lastMaintenance: '2025-03-25', nextMaintenanceAt: '2025-04-02', nextCalibrationAt: '2025-04-02', location: '动捕棚 1' },
+  { id: 'dev-004', name: '动捕套装 M3', type: '光学动捕', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-18', nextMaintenanceAt: '2025-04-18', nextCalibrationAt: '2025-04-12', location: '动捕棚 2' },
+  { id: 'dev-005', name: '柔性传感衣 S2', type: '可穿戴', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-20', nextMaintenanceAt: '2025-04-20', nextCalibrationAt: '2025-04-08', location: '康复场景配套间' },
+  { id: 'dev-006', name: '人形机器人 H2', type: '人形机器人', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-03-22', nextMaintenanceAt: '2025-04-01', nextCalibrationAt: '2025-03-29', location: '过渡区测试道' },
+  { id: 'dev-007', name: '可穿戴惯性套装 W1', type: '可穿戴', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-15', nextMaintenanceAt: '2025-04-15', nextCalibrationAt: '2025-04-10', location: '人体数据工位' },
+  { id: 'dev-008', name: '移动底盘 C1', type: 'AGV', status: 'unavailable', healthStatus: 'critical', lastMaintenance: '2025-03-24', nextMaintenanceAt: '2025-03-27', location: '仓储分拣区' },
+  { id: 'dev-009', name: '移动机械臂 R1', type: '移动操纵', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-08', nextMaintenanceAt: '2025-04-08', nextCalibrationAt: '2025-04-06', location: '农业示范大棚' },
+  { id: 'dev-010', name: '深度相机阵列 D4', type: '感知套件', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-12', nextMaintenanceAt: '2025-04-12', nextCalibrationAt: '2025-04-01', location: '电梯厅布设点' },
+  { id: 'dev-011', name: '边缘采集网关 G2', type: '网络设备', status: 'available', healthStatus: 'healthy', lastMaintenance: '2025-03-01', nextMaintenanceAt: '2025-06-01', location: '机房机柜 R3' },
+  { id: 'dev-012', name: '备份磁带库 T1', type: '存储', status: 'available', healthStatus: 'warning', lastMaintenance: '2025-02-15', nextMaintenanceAt: '2025-05-15', location: '异地灾备中心' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -673,6 +1423,11 @@ export const mockPersonnel: Personnel[] = [
     role: '遥操作员',
     status: 'busy',
     skills: ['双臂遥操作', '力控微调', '厨房长序列'],
+    skillRatings: [
+      { skill: '双臂遥操作', level: 3 },
+      { skill: '力控微调', level: 3 },
+      { skill: '厨房长序列', level: 2 },
+    ],
     schedule: [
       { date: '2025-03-26', startTime: '09:00', endTime: '12:00', taskId: 'task-001', label: '厨房抽屉台本' },
       { date: '2025-03-27', startTime: '14:00', endTime: '17:00', taskId: 'task-001', label: '厨房补拍（预留）' },
@@ -684,6 +1439,10 @@ export const mockPersonnel: Personnel[] = [
     role: '动捕演员',
     status: 'busy',
     skills: ['体育类动作', '高强度连续动作'],
+    skillRatings: [
+      { skill: '体育类动作', level: 3 },
+      { skill: '高强度连续动作', level: 2 },
+    ],
     schedule: [
       { date: '2025-03-26', startTime: '08:00', endTime: '11:00', taskId: 'task-007', label: '乒乓球攻球' },
       { date: '2025-03-25', startTime: '14:00', endTime: '18:30', taskId: 'task-002', label: '商超拣货' },
@@ -695,6 +1454,10 @@ export const mockPersonnel: Personnel[] = [
     role: '遥操作员',
     status: 'available',
     skills: ['人形机器人', '步态与越障'],
+    skillRatings: [
+      { skill: '人形机器人', level: 2 },
+      { skill: '步态与越障', level: 3 },
+    ],
     schedule: [
       { date: '2025-03-26', startTime: '13:30', endTime: '17:00', taskId: 'task-003', label: '门槛跨越' },
     ],
@@ -705,6 +1468,10 @@ export const mockPersonnel: Personnel[] = [
     role: '数据采集员',
     status: 'available',
     skills: ['工效学', '可穿戴标定'],
+    skillRatings: [
+      { skill: '工效学', level: 2 },
+      { skill: '可穿戴标定', level: 3 },
+    ],
     schedule: [{ date: '2025-03-27', startTime: '08:30', endTime: '11:30', taskId: 'task-004', label: '拧螺丝人体工效' }],
   },
   {
@@ -713,6 +1480,10 @@ export const mockPersonnel: Personnel[] = [
     role: '现场调度',
     status: 'busy',
     skills: ['多机协同', '安全预案'],
+    skillRatings: [
+      { skill: '多机协同', level: 3 },
+      { skill: '安全预案', level: 2 },
+    ],
     schedule: [{ date: '2025-03-25', startTime: '10:00', endTime: '16:00', taskId: 'task-005', label: 'AGV 协同（延期）' }],
   },
   {
@@ -721,6 +1492,10 @@ export const mockPersonnel: Personnel[] = [
     role: '遥操作员',
     status: 'available',
     skills: ['精密装配', '低力矩任务'],
+    skillRatings: [
+      { skill: '精密装配', level: 3 },
+      { skill: '低力矩任务', level: 2 },
+    ],
     schedule: [{ date: '2025-03-24', startTime: '09:00', endTime: '15:00', taskId: 'task-006', label: 'FPC 插拔' }],
   },
   {
@@ -729,6 +1504,10 @@ export const mockPersonnel: Personnel[] = [
     role: '康复辅具专员',
     status: 'available',
     skills: ['康复流程', '伦理合规'],
+    skillRatings: [
+      { skill: '康复流程', level: 3 },
+      { skill: '伦理合规', level: 2 },
+    ],
     schedule: [],
   },
   {
@@ -737,6 +1516,10 @@ export const mockPersonnel: Personnel[] = [
     role: '农业场景技师',
     status: 'available',
     skills: ['户外设备', '移动臂维护'],
+    skillRatings: [
+      { skill: '户外设备', level: 3 },
+      { skill: '移动臂维护', level: 2 },
+    ],
     schedule: [{ date: '2025-03-22', startTime: '07:00', endTime: '12:00', taskId: 'task-009', label: '大棚修剪' }],
   },
   {
@@ -745,6 +1528,10 @@ export const mockPersonnel: Personnel[] = [
     role: '人体数据采集员',
     status: 'available',
     skills: ['多相机同步', '隐私脱敏'],
+    skillRatings: [
+      { skill: '多相机同步', level: 3 },
+      { skill: '隐私脱敏', level: 2 },
+    ],
     schedule: [{ date: '2025-03-27', startTime: '17:00', endTime: '19:30', taskId: 'task-010', label: '电梯厅进出' }],
   },
   {
@@ -753,6 +1540,10 @@ export const mockPersonnel: Personnel[] = [
     role: '动捕演员',
     status: 'available',
     skills: ['舞蹈基础', '节拍对齐'],
+    skillRatings: [
+      { skill: '舞蹈基础', level: 3 },
+      { skill: '节拍对齐', level: 2 },
+    ],
     schedule: [{ date: '2025-03-28', startTime: '14:00', endTime: '18:00', taskId: 'task-011', label: '舞蹈教材' }],
   },
   {
@@ -761,6 +1552,10 @@ export const mockPersonnel: Personnel[] = [
     role: '项目经理',
     status: 'busy',
     skills: ['排期', '跨部门沟通'],
+    skillRatings: [
+      { skill: '排期', level: 3 },
+      { skill: '跨部门沟通', level: 3 },
+    ],
     schedule: [{ date: '2025-04-01', startTime: '09:00', endTime: '18:00', taskId: 'task-012', label: '枢纽大厅预演' }],
   },
   {
@@ -769,6 +1564,10 @@ export const mockPersonnel: Personnel[] = [
     role: '质检工程师',
     status: 'available',
     skills: ['数据抽检', '自动检测规则'],
+    skillRatings: [
+      { skill: '数据抽检', level: 3 },
+      { skill: '自动检测规则', level: 2 },
+    ],
     schedule: [{ date: '2025-03-26', startTime: '15:00', endTime: '18:00', taskId: 'ann-004', label: '标注抽检会议' }],
   },
 ];
@@ -778,18 +1577,18 @@ export const mockPersonnel: Personnel[] = [
 // ---------------------------------------------------------------------------
 
 export const mockScenes: Scene[] = [
-  { id: 'scene-001', name: '家庭厨房标准间', type: '家庭服务', status: 'active', location: 'B 栋 2 层', description: '标准化橱柜、灶具与常见餐具，支持多机位与力控遥操作。' },
-  { id: 'scene-002', name: '装配工位线体', type: '工业制造', status: 'active', location: 'C 栋产线模拟区', description: '螺丝工位、治具与工具车，适合工效与协作数据采集。' },
-  { id: 'scene-003', name: '商超仿真卖场', type: '零售物流', status: 'active', location: 'D 栋大空间', description: '货架、推车与收银mock，动捕覆盖率高。' },
-  { id: 'scene-004', name: '室内外过渡区', type: '移动机器人', status: 'active', location: '户外连廊', description: '多种门槛与坡度组合，天气可控半开放。' },
-  { id: 'scene-005', name: '康复训练室', type: '医疗康复', status: 'maintenance', location: 'E 栋 1 层', description: '平行杠、助行器；本周地胶更换中。' },
-  { id: 'scene-006', name: '仓储分拣区', type: '物流仓储', status: 'active', location: '自动化仓模拟', description: 'AGV 通道、拣选站与异常口。' },
-  { id: 'scene-007', name: '防静电工作台', type: '电子精密', status: 'active', location: '洁净间 2', description: '离子风机、显微镜工位。' },
-  { id: 'scene-008', name: '交通枢纽大厅', type: '公共场景', status: 'inactive', location: '联合实验基地', description: '审批通过后开放采集，当前仅勘景。' },
-  { id: 'scene-009', name: '体育馆多功能场地', type: '体育训练', status: 'active', location: '综合馆', description: '羽毛球/乒乓球快速切换布置。' },
-  { id: 'scene-010', name: '温室大棚示范区', type: '农业', status: 'active', location: '南侧试验田', description: '湿度大，设备需每日烘干。' },
-  { id: 'scene-011', name: '写字楼电梯厅', type: '公共场景', status: 'active', location: '合作物业场地', description: '高峰时段需物业协同。' },
-  { id: 'scene-012', name: '舞蹈排练厅', type: '文娱教育', status: 'active', location: '艺术中心分馆', description: '镜面墙、把杆与地胶维护良好。' },
+  { id: 'scene-001', name: '家庭厨房标准间', industry: '生活服务', type: '家庭服务', sceneSubtype: '标准成套厨房', status: 'active', location: 'B 栋 2 层', description: '标准化橱柜、灶具与常见餐具，支持多机位与力控遥操作。' },
+  { id: 'scene-002', name: '装配工位线体', industry: '制造与工业', type: '工业制造', sceneSubtype: '线体单工位', status: 'active', location: 'C 栋产线模拟区', description: '螺丝工位、治具与工具车，适合工效与协作数据采集。' },
+  { id: 'scene-003', name: '商超仿真卖场', industry: '零售与物流', type: '零售物流', sceneSubtype: '卖场拣选动线', status: 'active', location: 'D 栋大空间', description: '货架、推车与收银mock，动捕覆盖率高。' },
+  { id: 'scene-004', name: '室内外过渡区', industry: '移动机器人', type: '移动机器人', sceneSubtype: '门槛与坡道组合', status: 'active', location: '户外连廊', description: '多种门槛与坡度组合，天气可控半开放。' },
+  { id: 'scene-005', name: '康复训练室', industry: '医疗康复', type: '医疗康复', sceneSubtype: '步态与辅具', status: 'maintenance', location: 'E 栋 1 层', description: '平行杠、助行器；本周地胶更换中。' },
+  { id: 'scene-006', name: '仓储分拣区', industry: '零售与物流', type: '物流仓储', sceneSubtype: 'AGV 拣选通道', status: 'active', location: '自动化仓模拟', description: 'AGV 通道、拣选站与异常口。' },
+  { id: 'scene-007', name: '防静电工作台', industry: '制造与工业', type: '电子精密', sceneSubtype: '洁净间工位', status: 'active', location: '洁净间 2', description: '离子风机、显微镜工位。' },
+  { id: 'scene-008', name: '交通枢纽大厅', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '大客流通廊', status: 'inactive', location: '联合实验基地', description: '审批通过后开放采集，当前仅勘景。' },
+  { id: 'scene-009', name: '体育馆多功能场地', industry: '文体教育', type: '体育训练', sceneSubtype: '球类半场布置', status: 'active', location: '综合馆', description: '羽毛球/乒乓球快速切换布置。' },
+  { id: 'scene-010', name: '温室大棚示范区', industry: '农业与环境', type: '农业', sceneSubtype: '高湿温室', status: 'active', location: '南侧试验田', description: '湿度大，设备需每日烘干。' },
+  { id: 'scene-011', name: '写字楼电梯厅', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '电梯厅进出', status: 'active', location: '合作物业场地', description: '高峰时段需物业协同。' },
+  { id: 'scene-012', name: '舞蹈排练厅', industry: '文体教育', type: '文娱教育', sceneSubtype: '镜面排练厅', status: 'active', location: '艺术中心分馆', description: '镜面墙、把杆与地胶维护良好。' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -974,6 +1773,36 @@ export const monitoringCharts: MonitoringCharts = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// 13. 一键问题提报
+// ---------------------------------------------------------------------------
+
+export const mockIssueReports: IssueReport[] = [
+  {
+    id: 'issue-001',
+    source: 'task-workbench',
+    status: 'processing',
+    severity: 'high',
+    title: 'AGV 定位漂移导致任务延期',
+    description: 'task-005 在仓储分拣区出现定位跳变，建议优先处理底盘编码器和地图重建。',
+    taskId: 'task-005',
+    requirementId: 'req-006',
+    reporter: '韩博文',
+    reportedAt: '2025-03-25T15:40:00+08:00',
+  },
+  {
+    id: 'issue-002',
+    source: 'collection-app',
+    status: 'open',
+    severity: 'medium',
+    title: '动捕相机 #4 短时丢帧',
+    description: '采集员在 App 端上报，建议检查网线接触和相机时钟同步。',
+    sessionId: 'col-002',
+    reporter: '林婉清',
+    reportedAt: '2025-03-26T08:36:00+08:00',
+  },
+];
+
 /** 汇总导出，便于一次性注入演示页 */
 export const mockDataBundle = {
   dashboardStats,
@@ -993,4 +1822,5 @@ export const mockDataBundle = {
   dataQualityOverview,
   mockDatasets,
   monitoringCharts,
+  mockIssueReports,
 } as const;

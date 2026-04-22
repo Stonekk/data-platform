@@ -8,6 +8,7 @@ import Devices from '@/pages/Devices'
 import Personnel from '@/pages/Personnel'
 import Scenes from '@/pages/Scenes'
 import Collection from '@/pages/Collection'
+import CollectionApp from '@/pages/CollectionApp'
 import Processing from '@/pages/Processing'
 import Annotation from '@/pages/Annotation'
 import Quality from '@/pages/Quality'
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="scenes" element={<Scenes />} />
           </Route>
           <Route path="collection" element={<Collection />} />
+          <Route path="collection/app-demo" element={<CollectionApp />} />
           <Route path="processing" element={<Processing />} />
           <Route path="annotation" element={<Annotation />} />
           <Route path="quality" element={<Quality />} />

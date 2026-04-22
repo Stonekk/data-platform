@@ -18,7 +18,7 @@ export default function Resources() {
         <div>
           <h2 className="text-xl font-semibold text-slate-900">资源管理</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            管理设备、人员与采集场景资源
+            设备维保与校准计划、人员技能矩阵、场景三层分类（行业 → 类型 → 子类型）统一纳管
           </p>
         </div>
       </div>

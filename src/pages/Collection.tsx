@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
-
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
   Radio,
   RefreshCw,
+  Smartphone,
   Upload,
   Wifi,
   WifiOff,
 } from 'lucide-react'
-
 import { ProgressBar, StatusBadge } from '@/components/ui'
 import {
   collectionTransmissionSummary,
@@ -120,6 +120,7 @@ export default function Collection(): ReactElement {
   const [records, setRecords] = useState<TransmissionRecord[]>(() =>
     cloneRecords(mockTransmissionRecords),
   )
+
   const resetFromMock = useCallback(() => {
     setSessions(cloneSessions(mockCollectionSessions))
     setRecords(cloneRecords(mockTransmissionRecords))
@@ -128,7 +129,6 @@ export default function Collection(): ReactElement {
   useEffect(() => {
     const interval = window.setInterval(() => {
       const delta = (): number => 1 + Math.floor(Math.random() * 5)
-
       setSessions((prev) =>
         prev.map((s) => {
           if (s.status !== 'collecting' || s.progress >= 100) return s
@@ -142,7 +142,6 @@ export default function Collection(): ReactElement {
         }),
       )
     }, 3000)
-
     return () => window.clearInterval(interval)
   }, [])
 
@@ -154,7 +153,7 @@ export default function Collection(): ReactElement {
             数据采集与传输
           </h1>
           <p className="mt-1 text-sm text-text-secondary">
-            会话状态、边缘回传与中心同步一览（演示数据 + 实时进度模拟）
+            会话状态、边缘回传与中心同步一览（平台端）
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -173,9 +172,15 @@ export default function Collection(): ReactElement {
             <RefreshCw className="size-4" strokeWidth={1.75} aria-hidden />
             刷新
           </button>
+          <Link
+            to="/collection/app-demo"
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800"
+          >
+            <Smartphone className="size-4" strokeWidth={1.75} aria-hidden />
+            打开采集 App
+          </Link>
         </div>
       </header>
-
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {(
           [
@@ -227,11 +232,7 @@ export default function Collection(): ReactElement {
 
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <CheckCircle2
-            className="size-5 text-emerald-600"
-            strokeWidth={1.75}
-            aria-hidden
-          />
+          <CheckCircle2 className="size-5 text-emerald-600" strokeWidth={1.75} />
           <h2 className="text-lg font-semibold text-text">采集会话</h2>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -242,9 +243,7 @@ export default function Collection(): ReactElement {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="truncate font-medium text-text">
-                    {session.device}
-                  </p>
+                  <p className="truncate font-medium text-text">{session.device}</p>
                   <p className="mt-0.5 text-xs text-text-secondary">
                     开始 {session.startTime || '—'}
                   </p>
@@ -255,8 +254,7 @@ export default function Collection(): ReactElement {
                   className={cn(
                     'shrink-0 ring-1 ring-inset',
                     collectionBadgeClass(session.status),
-                    session.status === 'collecting' &&
-                      'motion-safe:animate-pulse',
+                    session.status === 'collecting' && 'motion-safe:animate-pulse',
                   )}
                 />
               </div>
@@ -270,17 +268,11 @@ export default function Collection(): ReactElement {
               </div>
               <div className="mt-3 flex items-center justify-between text-sm">
                 <span className="text-text-secondary">数据量</span>
-                <span className="font-medium tabular-nums text-text">
-                  {session.dataSize}
-                </span>
+                <span className="font-medium tabular-nums text-text">{session.dataSize}</span>
               </div>
               {session.anomalies.length > 0 && (
                 <div className="mt-3 flex gap-2 rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-xs text-amber-950">
-                  <AlertTriangle
-                    className="mt-0.5 size-4 shrink-0 text-amber-600"
-                    strokeWidth={1.75}
-                    aria-hidden
-                  />
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
                   <ul className="list-inside list-disc space-y-0.5">
                     {session.anomalies.map((a) => (
                       <li key={a}>{a}</li>
@@ -295,11 +287,7 @@ export default function Collection(): ReactElement {
 
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <Upload
-            className="size-5 text-primary"
-            strokeWidth={1.75}
-            aria-hidden
-          />
+          <Upload className="size-5 text-primary" strokeWidth={1.75} />
           <h2 className="text-lg font-semibold text-text">传输任务</h2>
         </div>
         <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm ring-1 ring-slate-950/5">
@@ -310,53 +298,34 @@ export default function Collection(): ReactElement {
                 className="grid gap-4 p-4 lg:grid-cols-[1fr_auto_280px] lg:items-center"
               >
                 <div className="min-w-0 space-y-1">
-                  <p className="truncate font-medium text-text">
-                    {row.destination}
-                  </p>
+                  <p className="truncate font-medium text-text">{row.destination}</p>
                   <p className="text-xs text-text-secondary">
-                    会话 {row.sessionId} · 开始{' '}
-                    {row.startedAt || '—'}
+                    会话 {row.sessionId} · 开始 {row.startedAt || '—'}
                   </p>
-                  {row.anomaly !== undefined && row.anomaly !== '' && (
+                  {row.anomaly && (
                     <p className="flex items-start gap-1.5 text-xs text-amber-900">
-                      <AlertTriangle
-                        className="mt-0.5 size-3.5 shrink-0 text-amber-600"
-                        aria-hidden
-                      />
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
                       {row.anomaly}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   {row.state === 'offline' ? (
-                    <WifiOff
-                      className="size-4 text-slate-400"
-                      strokeWidth={1.75}
-                      aria-hidden
-                    />
+                    <WifiOff className="size-4 text-slate-400" strokeWidth={1.75} />
                   ) : (
-                    <Wifi
-                      className="size-4 text-slate-400"
-                      strokeWidth={1.75}
-                      aria-hidden
-                    />
+                    <Wifi className="size-4 text-slate-400" strokeWidth={1.75} />
                   )}
                   <StatusBadge
                     status={transmissionStateLabel(row.state)}
                     size="sm"
-                    className={cn(
-                      'ring-1 ring-inset',
-                      transmissionBadgeClass(row.state),
-                    )}
+                    className={cn('ring-1 ring-inset', transmissionBadgeClass(row.state))}
                   />
                 </div>
-                <div className="min-w-0 lg:max-w-none">
-                  <ProgressBar
-                    value={row.progress}
-                    color={recordProgressColor(row.state)}
-                    size="sm"
-                  />
-                </div>
+                <ProgressBar
+                  value={row.progress}
+                  color={recordProgressColor(row.state)}
+                  size="sm"
+                />
               </div>
             ))}
           </div>
