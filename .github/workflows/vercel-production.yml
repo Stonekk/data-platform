@@ -3,11 +3,11 @@
 # (see https://vercel.com/docs/deployments/git/vercel-for-github or Vercel dashboard → Project → Settings → General).
 name: Vercel Production
 
+# 生产部署由 Vercel「连接 GitHub」在 push 到 main 时自动完成，此处不重复触发。
+# 需要仅用 CLI 方式部署时再手动运行 workflow，或打 v* 标签（需配置 VERCEL_* secrets）。
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
