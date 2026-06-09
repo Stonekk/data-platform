@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "deploy:vercel": "npx vercel@latest --prod",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:cos": "bash scripts/tencent-cos/sync-to-cos.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
