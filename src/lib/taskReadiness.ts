@@ -9,6 +9,7 @@ import {
   type Task,
   type TaskScript,
 } from '@/data/mock'
+import { isScriptSchedulable } from '@/lib/scriptWorkflow'
 
 export type ReadinessState = 'ready' | 'warn' | 'missing'
 
@@ -68,12 +69,18 @@ function checkDevice(task: Task): ReadinessCheck {
   return { state: 'ready' }
 }
 
-function checkScript(task: Task): ReadinessCheck {
+function checkScript(task: Task, scripts: TaskScript[]): ReadinessCheck {
   if (task.scriptId === undefined || task.scriptId === '') {
-    return { state: 'warn', reason: '未绑定台本（"事"要素缺失）' }
+    return { state: 'missing', reason: '未绑定台本（"事"要素缺失）' }
   }
-  const s: TaskScript | undefined = mockTaskScripts.find((x) => x.taskId === task.scriptId)
+  const s: TaskScript | undefined = scripts.find((x) => x.taskId === task.scriptId)
   if (s === undefined) return { state: 'missing', reason: `台本 ${task.scriptId} 不存在` }
+  if (task.scriptException?.status === 'open') {
+    return { state: 'warn', reason: '台本道具异常待运营现场核实' }
+  }
+  if (!isScriptSchedulable(s)) {
+    return { state: 'missing', reason: '台本未确认绑定，不可调度' }
+  }
   return { state: 'ready' }
 }
 
@@ -92,10 +99,13 @@ function checkScene(task: Task): ReadinessCheck {
   return { state: 'ready' }
 }
 
-export function computeReadiness(task: Task): TaskReadiness {
+export function computeReadiness(
+  task: Task,
+  scripts: TaskScript[] = mockTaskScripts,
+): TaskReadiness {
   const personnel = checkPersonnel(task)
   const device = checkDevice(task)
-  const script = checkScript(task)
+  const script = checkScript(task, scripts)
   const scene = checkScene(task)
   const checks: ReadinessCheck[] = [personnel, device, script, scene]
   const overall: TaskReadiness['overall'] = checks.some((c) => c.state === 'missing')

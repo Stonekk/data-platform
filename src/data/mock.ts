@@ -72,6 +72,31 @@ export type PersonnelStatus = 'available' | 'busy';
 
 export type SceneStatus = 'active' | 'inactive' | 'maintenance';
 
+/** 场地层级：楼栋 → 楼层 → 室（场景库挂在「室」） */
+export type VenueLevel = 'building' | 'floor' | 'room';
+
+export type VenueSiteType = 'self_built' | 'crowdsourced';
+
+export type VenueConstructionStatus = 'planning' | 'building' | 'completed';
+
+export type VenueUsageStatus = 'maintenance' | 'in_use' | 'idle';
+
+export type VenueRentalStatus = 'owned' | 'leasing' | 'returned';
+
+export type Venue = {
+  id: string;
+  name: string;
+  parentId: string | null;
+  level: VenueLevel;
+  siteType: VenueSiteType;
+  constructionStatus: VenueConstructionStatus;
+  usageStatus: VenueUsageStatus;
+  rentalStatus: VenueRentalStatus;
+  category: string;
+  city: string;
+  tags: string[];
+};
+
 export type CollectionStatus = 'idle' | 'collecting' | 'paused' | 'completed' | 'failed';
 
 export type PipelineStageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
@@ -192,6 +217,9 @@ export type TaskScriptStep = {
   notes?: string;
 };
 
+export type ScriptStatus = 'draft' | 'confirmed';
+export type ScriptDifficulty = 'simple' | 'complex' | 'correction';
+
 export type TaskScript = {
   taskId: string;
   title: string;
@@ -199,6 +227,37 @@ export type TaskScript = {
   personnelIds: string[];
   deviceIds: string[];
   steps: TaskScriptStep[];
+  /** 台本生命周期：draft 待确认，confirmed 可调度 */
+  status: ScriptStatus;
+  sceneId: string;
+  propIds: string[];
+  /** 命中的原子动作大类 id（cat-a … cat-i） */
+  atomicActionIds: string[];
+  difficulty: ScriptDifficulty;
+  /** 自然语言任务指令 */
+  instruction: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
+};
+
+export type ScriptException = {
+  reportedAt: string;
+  reporter: string;
+  reason: string;
+  status: 'open' | 'resolved';
+};
+
+export type PropApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
+export type Prop = {
+  id: string;
+  name: string;
+  sceneId: string;
+  category: string;
+  requiresApproval: boolean;
+  approvalStatus: PropApprovalStatus;
+  assetCode: string;
+  quantity: number;
 };
 
 export type TaskScheduleSlot = {
@@ -224,6 +283,8 @@ export type Task = {
   sceneId?: string;
   /** 关联台本 ID（"事"要素），对齐 mockTaskScripts[*].taskId */
   scriptId?: string;
+  /** 采集员道具不符异常（领取后打标） */
+  scriptException?: ScriptException;
   /** 关联需求，用于任务拆解溯源；缺失为"孤儿任务"（应补录） */
   requirementId?: string;
   /** 任务优先级，调度面板颜色与排序依据；默认继承需求优先级 */
@@ -276,6 +337,8 @@ export type Personnel = {
 export type Scene = {
   id: string;
   name: string;
+  /** 所属场地（室级叶子节点） */
+  venueId: string;
   /** 场景类型（中间层）：零售物流、家庭服务等 */
   type: string;
   /** 行业域（顶层）：画板「行业 → 场景类型 → 子类型」第一层 */
@@ -285,6 +348,25 @@ export type Scene = {
   status: SceneStatus;
   location: string;
   description: string;
+  /** 台本配置默认推荐道具 */
+  recommendedPropIds: string[];
+  /** 默认台本模板 */
+  defaultTemplateId?: string;
+};
+
+export type ScriptTemplateStatus = 'active' | 'inactive';
+
+export type ScriptTemplate = {
+  id: string;
+  name: string;
+  /** 适用场景类型（如家庭服务），用于推荐匹配 */
+  applicableSceneTypes: string[];
+  difficulty: ScriptDifficulty;
+  /** 台本说明骨架，支持 {scene} {props} {actions} {taskType} 占位符 */
+  instructionSkeleton: string;
+  /** 步骤槽位 */
+  stepSlots: string[];
+  status: ScriptTemplateStatus;
 };
 
 export type CollectionSession = {
@@ -1198,6 +1280,12 @@ export const mockTasks: Task[] = [
     deviceId: 'dev-006',
     sceneId: 'scene-004',
     scriptId: 'task-003',
+    scriptException: {
+      reportedAt: '2025-03-26T13:00:00+08:00',
+      reporter: '赵子墨',
+      reason: '现场门槛道具高度与台本描述不符',
+      status: 'open',
+    },
     priority: 'high',
   },
   {
@@ -1306,6 +1394,7 @@ export const mockTasks: Task[] = [
     personnelId: 'per-009',
     deviceId: 'dev-010',
     sceneId: 'scene-011',
+    scriptId: 'task-010',
     priority: 'medium',
   },
   {
@@ -1358,6 +1447,14 @@ export const mockTaskScripts: TaskScript[] = [
     scheduledTime: '2025-03-26T09:00:00+08:00',
     personnelIds: ['per-001'],
     deviceIds: ['dev-001'],
+    status: 'confirmed',
+    sceneId: 'scene-001',
+    propIds: ['prop-001', 'prop-002', 'prop-003'],
+    atomicActionIds: ['cat-a', 'cat-b'],
+    difficulty: 'complex',
+    instruction: '在家庭厨房标准间，使用抽屉、汤勺与分隔盒，完成遥操作采集相关演示。',
+    confirmedAt: '2025-03-25T18:00:00+08:00',
+    confirmedBy: '运营-张敏',
     steps: [
       { order: 1, operation: '标定起始位姿，确认力控阈值', durationMinutes: 10 },
       { order: 2, operation: '拉开抽屉至全开，停顿 2s', durationMinutes: 5 },
@@ -1372,6 +1469,14 @@ export const mockTaskScripts: TaskScript[] = [
     scheduledTime: '2025-03-26T13:30:00+08:00',
     personnelIds: ['per-003'],
     deviceIds: ['dev-006'],
+    status: 'confirmed',
+    sceneId: 'scene-004',
+    propIds: ['prop-010'],
+    atomicActionIds: ['cat-h', 'cat-i'],
+    difficulty: 'complex',
+    instruction: '在室内外过渡区，使用木质门槛道具，完成遥操作采集相关演示。',
+    confirmedAt: '2025-03-25T20:00:00+08:00',
+    confirmedBy: '运营-张敏',
     steps: [
       { order: 1, operation: '双足站立标定，检查 IMU 温漂', durationMinutes: 12 },
       { order: 2, operation: '正向跨越 ×5 次', durationMinutes: 25 },
@@ -1385,12 +1490,50 @@ export const mockTaskScripts: TaskScript[] = [
     scheduledTime: '2025-03-26T08:00:00+08:00',
     personnelIds: ['per-002'],
     deviceIds: ['dev-004'],
+    status: 'draft',
+    sceneId: 'scene-011',
+    propIds: ['prop-020', 'prop-021'],
+    atomicActionIds: ['cat-a', 'cat-g'],
+    difficulty: 'simple',
+    instruction: '在体育馆多功能场地，使用球拍与乒乓球，完成动捕采集相关演示。',
     steps: [
       { order: 1, operation: '热身与骨骼绑定检查', durationMinutes: 15 },
       { order: 2, operation: '定点喂球机节奏 80/min', durationMinutes: 30 },
       { order: 3, operation: '移动中攻球（半场）', durationMinutes: 35 },
     ],
   },
+  {
+    taskId: 'task-010',
+    title: '台本：电梯厅进出动捕',
+    scheduledTime: '2025-03-27T17:00:00+08:00',
+    personnelIds: ['per-009'],
+    deviceIds: ['dev-010'],
+    status: 'confirmed',
+    sceneId: 'scene-011',
+    propIds: ['prop-020'],
+    atomicActionIds: ['cat-h', 'cat-i'],
+    difficulty: 'simple',
+    instruction: '在写字楼电梯厅，使用引导标识道具，覆盖全身移动与移动-操作耦合，完成人体数据采集演示。',
+    confirmedAt: '2025-03-27T10:00:00+08:00',
+    confirmedBy: '运营-张敏',
+    steps: [
+      { order: 1, operation: '标定电梯厅起始站位', durationMinutes: 10 },
+      { order: 2, operation: '进电梯 ×3 次（不同站位）', durationMinutes: 20 },
+      { order: 3, operation: '出电梯并转身归位', durationMinutes: 15 },
+    ],
+  },
+];
+
+export const mockProps: Prop[] = [
+  { id: 'prop-001', name: '厨房抽屉', sceneId: 'scene-001', category: '家具', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-DRW-01', quantity: 2 },
+  { id: 'prop-002', name: '汤勺', sceneId: 'scene-001', category: '餐具', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-UTL-03', quantity: 6 },
+  { id: 'prop-003', name: '分隔盒', sceneId: 'scene-001', category: '收纳', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-BOX-02', quantity: 4 },
+  { id: 'prop-010', name: '木质门槛 15cm', sceneId: 'scene-004', category: '结构', requiresApproval: false, approvalStatus: 'none', assetCode: 'TRN-THR-15', quantity: 1 },
+  { id: 'prop-011', name: '可调高度门槛（贵重）', sceneId: 'scene-004', category: '结构', requiresApproval: true, approvalStatus: 'none', assetCode: 'TRN-THR-ADJ', quantity: 1 },
+  { id: 'prop-020', name: '乒乓球拍', sceneId: 'scene-011', category: '运动器材', requiresApproval: false, approvalStatus: 'none', assetCode: 'GYM-PAD-01', quantity: 8 },
+  { id: 'prop-021', name: '乒乓球', sceneId: 'scene-011', category: '消耗品', requiresApproval: false, approvalStatus: 'none', assetCode: 'GYM-BAL-01', quantity: 200 },
+  { id: 'prop-030', name: '商用咖啡机', sceneId: 'scene-003', category: '设备', requiresApproval: true, approvalStatus: 'approved', assetCode: 'CAF-MCH-01', quantity: 1 },
+  { id: 'prop-031', name: '展车模型', sceneId: 'scene-005', category: '贵重展具', requiresApproval: true, approvalStatus: 'pending', assetCode: '4S-CAR-01', quantity: 1 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1573,22 +1716,254 @@ export const mockPersonnel: Personnel[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// 6. 场景
+// 6. 场地（楼栋 → 楼层 → 室）
+// ---------------------------------------------------------------------------
+
+export const mockVenues: Venue[] = [
+  {
+    id: 'venue-bld-hq',
+    name: '总部大楼A栋',
+    parentId: null,
+    level: 'building',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '住宅',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['测试1', '办公室'],
+  },
+  {
+    id: 'venue-flr-hq-1',
+    name: 'A栋-1楼',
+    parentId: 'venue-bld-hq',
+    level: 'floor',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '住宅',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['会议室'],
+  },
+  {
+    id: 'venue-room-101',
+    name: 'A栋-1楼-101室',
+    parentId: 'venue-flr-hq-1',
+    level: 'room',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '住宅',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['客厅', '厨房'],
+  },
+  {
+    id: 'venue-room-102',
+    name: 'A栋-1楼-102室',
+    parentId: 'venue-flr-hq-1',
+    level: 'room',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'idle',
+    rentalStatus: 'owned',
+    category: '住宅',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['卧室'],
+  },
+  {
+    id: 'venue-flr-hq-2',
+    name: 'A栋-2楼',
+    parentId: 'venue-bld-hq',
+    level: 'floor',
+    siteType: 'self_built',
+    constructionStatus: 'building',
+    usageStatus: 'maintenance',
+    rentalStatus: 'owned',
+    category: '工厂',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['工位区'],
+  },
+  {
+    id: 'venue-room-201',
+    name: 'A栋-2楼-201室',
+    parentId: 'venue-flr-hq-2',
+    level: 'room',
+    siteType: 'self_built',
+    constructionStatus: 'building',
+    usageStatus: 'maintenance',
+    rentalStatus: 'owned',
+    category: '工厂',
+    city: '广东省 / 深圳市 / 福田区',
+    tags: ['线体'],
+  },
+  {
+    id: 'venue-bld-south',
+    name: '华南片区',
+    parentId: null,
+    level: 'building',
+    siteType: 'self_built',
+    constructionStatus: 'planning',
+    usageStatus: 'maintenance',
+    rentalStatus: 'leasing',
+    category: '商超',
+    city: '广东省 / 广州市 / 天河区',
+    tags: ['规划'],
+  },
+  {
+    id: 'venue-bld-crowd',
+    name: '众包场地-天河店',
+    parentId: null,
+    level: 'building',
+    siteType: 'crowdsourced',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'leasing',
+    category: '商超',
+    city: '广东省 / 广州市 / 天河区',
+    tags: ['商场', '仓库'],
+  },
+  {
+    id: 'venue-flr-crowd-1',
+    name: '卖场层',
+    parentId: 'venue-bld-crowd',
+    level: 'floor',
+    siteType: 'crowdsourced',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'leasing',
+    category: '商超',
+    city: '广东省 / 广州市 / 天河区',
+    tags: ['卖场'],
+  },
+  {
+    id: 'venue-room-market',
+    name: '仿真卖场区',
+    parentId: 'venue-flr-crowd-1',
+    level: 'room',
+    siteType: 'crowdsourced',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'leasing',
+    category: '商超',
+    city: '广东省 / 广州市 / 天河区',
+    tags: ['拣选动线'],
+  },
+  {
+    id: 'venue-bld-lab',
+    name: '联合实验基地',
+    parentId: null,
+    level: 'building',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '公共',
+    city: '广东省 / 深圳市 / 南山区',
+    tags: ['实验'],
+  },
+  {
+    id: 'venue-flr-lab-1',
+    name: '基地-1层',
+    parentId: 'venue-bld-lab',
+    level: 'floor',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '公共',
+    city: '广东省 / 深圳市 / 南山区',
+    tags: [],
+  },
+  {
+    id: 'venue-room-lab-hall',
+    name: '枢纽大厅',
+    parentId: 'venue-flr-lab-1',
+    level: 'room',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'idle',
+    rentalStatus: 'owned',
+    category: '公共',
+    city: '广东省 / 深圳市 / 南山区',
+    tags: ['大厅'],
+  },
+  {
+    id: 'venue-room-lab-outdoor',
+    name: '户外连廊',
+    parentId: 'venue-flr-lab-1',
+    level: 'room',
+    siteType: 'self_built',
+    constructionStatus: 'completed',
+    usageStatus: 'in_use',
+    rentalStatus: 'owned',
+    category: '公共',
+    city: '广东省 / 深圳市 / 南山区',
+    tags: ['过渡'],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 7. 台本模板
+// ---------------------------------------------------------------------------
+
+export const mockScriptTemplates: ScriptTemplate[] = [
+  {
+    id: 'tpl-001',
+    name: '家庭厨房-抽屉取放标准',
+    applicableSceneTypes: ['家庭服务'],
+    difficulty: 'complex',
+    instructionSkeleton: '在{scene}，使用{props}，按模板完成{taskType}；覆盖动作{actions}。',
+    stepSlots: ['标定起始位姿与力控阈值', '拉开抽屉至全开并停顿', '抓取目标道具并归位', '推回抽屉确认闭合', '第三视角巡检与数据封包'],
+    status: 'active',
+  },
+  {
+    id: 'tpl-002',
+    name: '零售卖场-拣选动线',
+    applicableSceneTypes: ['零售物流', '物流仓储'],
+    difficulty: 'complex',
+    instructionSkeleton: '在{scene}沿拣选动线，使用{props}完成{taskType}，动作覆盖{actions}。',
+    stepSlots: ['推车就位与货架定位', '按单拣选放入推车', '收银/mock 扫码环节', '返架与动线复位'],
+    status: 'active',
+  },
+  {
+    id: 'tpl-003',
+    name: '移动机器人-门槛跨越',
+    applicableSceneTypes: ['移动机器人'],
+    difficulty: 'complex',
+    instructionSkeleton: '在{scene}，使用{props}，完成遥操作采集演示；动作{actions}。',
+    stepSlots: ['双足站立标定', '正向跨越多次', '侧向跨越多次', '受控失败样本采集'],
+    status: 'active',
+  },
+  {
+    id: 'tpl-004',
+    name: '公共场景-进出动线简版',
+    applicableSceneTypes: ['公共场景'],
+    difficulty: 'simple',
+    instructionSkeleton: '在{scene}完成{taskType}进出动线采集，道具{props}，动作{actions}。',
+    stepSlots: ['起始站位标定', '进出场重复演练', '转身归位与收尾'],
+    status: 'active',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 8. 场景库（挂在室级场地）
 // ---------------------------------------------------------------------------
 
 export const mockScenes: Scene[] = [
-  { id: 'scene-001', name: '家庭厨房标准间', industry: '生活服务', type: '家庭服务', sceneSubtype: '标准成套厨房', status: 'active', location: 'B 栋 2 层', description: '标准化橱柜、灶具与常见餐具，支持多机位与力控遥操作。' },
-  { id: 'scene-002', name: '装配工位线体', industry: '制造与工业', type: '工业制造', sceneSubtype: '线体单工位', status: 'active', location: 'C 栋产线模拟区', description: '螺丝工位、治具与工具车，适合工效与协作数据采集。' },
-  { id: 'scene-003', name: '商超仿真卖场', industry: '零售与物流', type: '零售物流', sceneSubtype: '卖场拣选动线', status: 'active', location: 'D 栋大空间', description: '货架、推车与收银mock，动捕覆盖率高。' },
-  { id: 'scene-004', name: '室内外过渡区', industry: '移动机器人', type: '移动机器人', sceneSubtype: '门槛与坡道组合', status: 'active', location: '户外连廊', description: '多种门槛与坡度组合，天气可控半开放。' },
-  { id: 'scene-005', name: '康复训练室', industry: '医疗康复', type: '医疗康复', sceneSubtype: '步态与辅具', status: 'maintenance', location: 'E 栋 1 层', description: '平行杠、助行器；本周地胶更换中。' },
-  { id: 'scene-006', name: '仓储分拣区', industry: '零售与物流', type: '物流仓储', sceneSubtype: 'AGV 拣选通道', status: 'active', location: '自动化仓模拟', description: 'AGV 通道、拣选站与异常口。' },
-  { id: 'scene-007', name: '防静电工作台', industry: '制造与工业', type: '电子精密', sceneSubtype: '洁净间工位', status: 'active', location: '洁净间 2', description: '离子风机、显微镜工位。' },
-  { id: 'scene-008', name: '交通枢纽大厅', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '大客流通廊', status: 'inactive', location: '联合实验基地', description: '审批通过后开放采集，当前仅勘景。' },
-  { id: 'scene-009', name: '体育馆多功能场地', industry: '文体教育', type: '体育训练', sceneSubtype: '球类半场布置', status: 'active', location: '综合馆', description: '羽毛球/乒乓球快速切换布置。' },
-  { id: 'scene-010', name: '温室大棚示范区', industry: '农业与环境', type: '农业', sceneSubtype: '高湿温室', status: 'active', location: '南侧试验田', description: '湿度大，设备需每日烘干。' },
-  { id: 'scene-011', name: '写字楼电梯厅', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '电梯厅进出', status: 'active', location: '合作物业场地', description: '高峰时段需物业协同。' },
-  { id: 'scene-012', name: '舞蹈排练厅', industry: '文体教育', type: '文娱教育', sceneSubtype: '镜面排练厅', status: 'active', location: '艺术中心分馆', description: '镜面墙、把杆与地胶维护良好。' },
+  { id: 'scene-001', name: '家庭厨房标准间', venueId: 'venue-room-101', industry: '生活服务', type: '家庭服务', sceneSubtype: '标准成套厨房', status: 'active', location: 'A栋-1楼-101室', description: '标准化橱柜、灶具与常见餐具，支持多机位与力控遥操作。', recommendedPropIds: ['prop-001', 'prop-002', 'prop-003'], defaultTemplateId: 'tpl-001' },
+  { id: 'scene-002', name: '装配工位线体', venueId: 'venue-room-201', industry: '制造与工业', type: '工业制造', sceneSubtype: '线体单工位', status: 'active', location: 'A栋-2楼-201室', description: '螺丝工位、治具与工具车，适合工效与协作数据采集。', recommendedPropIds: [], defaultTemplateId: 'tpl-001' },
+  { id: 'scene-003', name: '商超仿真卖场', venueId: 'venue-room-market', industry: '零售与物流', type: '零售物流', sceneSubtype: '卖场拣选动线', status: 'active', location: '仿真卖场区', description: '货架、推车与收银mock，动捕覆盖率高。', recommendedPropIds: ['prop-030'], defaultTemplateId: 'tpl-002' },
+  { id: 'scene-004', name: '室内外过渡区', venueId: 'venue-room-lab-outdoor', industry: '移动机器人', type: '移动机器人', sceneSubtype: '门槛与坡道组合', status: 'active', location: '户外连廊', description: '多种门槛与坡度组合，天气可控半开放。', recommendedPropIds: ['prop-010'], defaultTemplateId: 'tpl-003' },
+  { id: 'scene-005', name: '康复训练室', venueId: 'venue-room-102', industry: '医疗康复', type: '医疗康复', sceneSubtype: '步态与辅具', status: 'maintenance', location: 'A栋-1楼-102室', description: '平行杠、助行器；本周地胶更换中。', recommendedPropIds: ['prop-031'], defaultTemplateId: undefined },
+  { id: 'scene-006', name: '仓储分拣区', venueId: 'venue-room-market', industry: '零售与物流', type: '物流仓储', sceneSubtype: 'AGV 拣选通道', status: 'active', location: '仿真卖场区-仓储角', description: 'AGV 通道、拣选站与异常口。', recommendedPropIds: ['prop-030'], defaultTemplateId: 'tpl-002' },
+  { id: 'scene-007', name: '防静电工作台', venueId: 'venue-room-201', industry: '制造与工业', type: '电子精密', sceneSubtype: '洁净间工位', status: 'active', location: 'A栋-2楼-201室', description: '离子风机、显微镜工位。', recommendedPropIds: [], defaultTemplateId: 'tpl-001' },
+  { id: 'scene-008', name: '交通枢纽大厅', venueId: 'venue-room-lab-hall', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '大客流通廊', status: 'inactive', location: '枢纽大厅', description: '审批通过后开放采集，当前仅勘景。', recommendedPropIds: [], defaultTemplateId: 'tpl-004' },
+  { id: 'scene-009', name: '体育馆多功能场地', venueId: 'venue-room-101', industry: '文体教育', type: '体育训练', sceneSubtype: '球类半场布置', status: 'active', location: 'A栋-1楼-101室', description: '羽毛球/乒乓球快速切换布置。', recommendedPropIds: ['prop-020', 'prop-021'], defaultTemplateId: 'tpl-001' },
+  { id: 'scene-010', name: '温室大棚示范区', venueId: 'venue-room-lab-outdoor', industry: '农业与环境', type: '农业', sceneSubtype: '高湿温室', status: 'active', location: '户外连廊-南侧', description: '湿度大，设备需每日烘干。', recommendedPropIds: [], defaultTemplateId: undefined },
+  { id: 'scene-011', name: '写字楼电梯厅', venueId: 'venue-room-lab-hall', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '电梯厅进出', status: 'active', location: '枢纽大厅-电梯厅', description: '高峰时段需物业协同。', recommendedPropIds: ['prop-020'], defaultTemplateId: 'tpl-004' },
+  { id: 'scene-012', name: '舞蹈排练厅', venueId: 'venue-room-102', industry: '文体教育', type: '文娱教育', sceneSubtype: '镜面排练厅', status: 'active', location: 'A栋-1楼-102室', description: '镜面墙、把杆与地胶维护良好。', recommendedPropIds: [], defaultTemplateId: undefined },
 ];
 
 // ---------------------------------------------------------------------------

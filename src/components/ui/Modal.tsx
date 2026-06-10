@@ -11,7 +11,7 @@ import { X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
-export type ModalSize = 'sm' | 'md' | 'lg'
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
 export type ModalProps = {
   isOpen: boolean
@@ -26,6 +26,7 @@ const sizeToMaxWidth: Record<ModalSize, string> = {
   sm: 'max-w-md',
   md: 'max-w-lg',
   lg: 'max-w-2xl',
+  xl: 'max-w-4xl',
 }
 
 export function Modal({
@@ -108,7 +109,12 @@ export function Modal({
             <X className="size-5" strokeWidth={1.75} />
           </button>
         </div>
-        <div className="max-h-[min(70vh,560px)] overflow-y-auto px-5 py-4">
+        <div
+          className={cn(
+            'overflow-y-auto px-5 py-4',
+            size === 'xl' ? 'max-h-[min(85vh,720px)]' : 'max-h-[min(70vh,560px)]',
+          )}
+        >
           {children}
         </div>
       </div>

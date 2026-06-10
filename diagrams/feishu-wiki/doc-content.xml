@@ -1,0 +1,143 @@
+<title>人体数采台本机制与协作流程</title>
+
+<p>基于 <cite type="doc" doc-id="MZAYdU8e8oZM2Exp12pcsoCenGf" title="[XA 203075] CU-17 M2: 广州自营场地人体数采需求"></cite> 整理。画板为飞书原生可编辑格式，双击即可修改节点与连线。</p>
+
+<h2>1. 三方协作总览（泳道图）</h2>
+
+<whiteboard type="mermaid">
+flowchart TB
+    subgraph OPS["运营"]
+        O1["搭建场景与道具"]
+        O2["设计任务清单"]
+        O3["对照原子动作集"]
+        O4["补录未识别道具"]
+        O5["抽检台本质量"]
+        O6["下发任务与变体清单"]
+        O7["监控配额与重复度"]
+    end
+
+    subgraph SYS["系统 VLM + LLM"]
+        S1["接收场景照片"]
+        S2["VLM 识别道具"]
+        S3["批量生成候选任务"]
+        S4["LLM 合理性筛选"]
+        S5["难度分级"]
+        S6["生成可执行台本"]
+    end
+
+    subgraph COL["采集员"]
+        C1["到达场景"]
+        C2["拍广角照打卡"]
+        C3["领取台本"]
+        C4["按指令演示"]
+        C5["变体逐项打卡"]
+        C6["裁剪后提交"]
+    end
+
+    O1 --> O2 --> O3
+    O3 -.触发.-> S3
+    C1 --> C2 --> S1 --> S2
+    S2 -->|识别失败| O4 --> S3
+    S2 --> S3 --> S4 --> S5 --> S6
+    S6 --> O5 --> O6 --> C3
+    C3 --> C4 --> C5 --> C6 --> O7
+</whiteboard>
+
+<h2>2. 台本生成时序图</h2>
+
+<whiteboard type="mermaid">
+sequenceDiagram
+    autonumber
+    participant 运营
+    participant 采集员
+    participant VLM as VLM识道具
+    participant LLM as LLM筛任务
+    participant 台本库 as 台本库
+
+    运营->>运营: 搭建场景、道具、任务框架
+    运营->>台本库: 配置原子动作库
+
+    采集员->>VLM: 上传场景广角照
+    VLM->>VLM: 识别道具
+
+    alt 识别不准
+        VLM-->>运营: 待补录列表
+        运营->>台本库: 手动补录道具
+    end
+
+    VLM->>LLM: 场景+道具+原子动作
+    LLM->>LLM: 批量生成候选任务
+    LLM->>LLM: 筛除不合理任务
+    LLM->>台本库: 分难度台本
+
+    运营->>台本库: 抽检台本
+    运营->>采集员: 下发任务与变体清单
+
+    loop 每个变体
+        采集员->>采集员: 按台本演示
+        采集员->>运营: 提交数据
+    end
+
+    运营->>运营: 监控配额与合格率
+</whiteboard>
+
+<h2>3. 单条数据：从台本到入库</h2>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["场景打卡照"] --> B["道具识别"]
+    B --> C["候选任务池"]
+    D["原子动作库"] --> C
+    E["运营任务框架"] --> C
+    C --> F{"LLM合理?"}
+    F -->|否| G["丢弃"]
+    F -->|是| H["分难度台本"]
+    H --> I["运营抽检"]
+    I --> J["采集员执行"]
+    J --> K{"合格?"}
+    K -->|否| L["返工作废"]
+    K -->|是| M["入库"]
+    M --> N["配额打卡"]
+    N --> O{"停采?"}
+    O -->|未满| J
+    O -->|已满| P["下一任务"]
+</whiteboard>
+
+<h2>4. 角色职责速览</h2>
+
+<whiteboard type="mermaid">
+mindmap
+  root((人体数采台本体系))
+    系统
+      VLM识道具
+      批量生成任务
+      LLM合理性筛选
+      难度分级下发
+    运营
+      场景道具建设
+      任务清单设计
+      原子动作覆盖
+      道具补录抽检
+      变体清单下发
+      配额质控监控
+    采集员
+      场景广角打卡
+      按台本演示
+      变体逐项采集
+      纠错含恢复
+      裁剪后提交
+</whiteboard>
+
+<h2>5. 关键数字备忘</h2>
+
+<table>
+<thead>
+<tr><th>维度</th><th>配额</th></tr>
+</thead>
+<tbody>
+<tr><td>台本生成链路</td><td>打卡 → VLM识道具 → 组合生成 → LLM筛选 → 分难度下发</td></tr>
+<tr><td>难度分布</td><td>简单 : 复杂 : 纠错 ≈ 3 : 5 : 2</td></tr>
+<tr><td>每任务条数</td><td>50 变体 × 4 人 = 200 条</td></tr>
+<tr><td>停采条件</td><td>配额满 / 达净时长上限 / 新组合率 &lt; 20%</td></tr>
+</tbody>
+</table>

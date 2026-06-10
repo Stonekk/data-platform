@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { Navigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronRight,
   Clock,
   Copy,
-  Cpu,
   GitBranch,
   Link2,
-  Pause,
-  Play,
   Plus,
-  User,
   X,
   XCircle,
 } from 'lucide-react'
@@ -23,22 +19,19 @@ import {
   SearchFilter,
   type SearchFilterDef,
   StatusBadge,
-  Tabs,
-  type TabItem,
 } from '@/components/ui'
+import { mockDevices, mockPersonnel, mockRequirements, mockScenes, mockTaskScripts, mockTasks, type Requirement, type Task, type TaskPriority, type TaskScript, type TaskStatus } from '@/data/mock'
+import { ScheduleBoard } from '@/components/tasks/ScheduleBoard'
 import {
-  mockDevices,
-  mockPersonnel,
-  mockRequirements,
-  mockScenes,
-  mockTaskScripts,
-  mockTasks,
-  type Requirement,
-  type Task,
-  type TaskPriority,
-  type TaskScript,
-  type TaskStatus,
-} from '@/data/mock'
+  ScriptConfigPanel,
+  type ScriptWizardStep,
+} from '@/components/tasks/ScriptConfigPanel'
+import { ScriptContentCard } from '@/components/tasks/ScriptContentCard'
+import { usePlatformProps } from '@/data/propStore'
+import { usePlatformVenues } from '@/data/venueStore'
+import { runAutoSchedule } from '@/lib/autoSchedule'
+import { generateDemoScheduleTasks } from '@/lib/scheduleBoard'
+import { applyOpsScriptFix, isScriptSchedulable } from '@/lib/scriptWorkflow'
 import { cn } from '@/lib/utils'
 import {
   computeReadiness,
@@ -53,6 +46,24 @@ import {
 // ---------------------------------------------------------------------------
 // 常量与工具
 // ---------------------------------------------------------------------------
+
+const TASK_TABS = ['list', 'decomposition', 'schedule'] as const
+type TaskTab = (typeof TASK_TABS)[number]
+
+const TASK_TAB_META: Record<TaskTab, { title: string; description: string }> = {
+  list: {
+    title: '任务列表',
+    description: '查看已拆解任务单元的状态、就绪校验与台本预警',
+  },
+  decomposition: {
+    title: '任务拆解',
+    description: '从已批准需求拆解任务单元，配置台本并绑定人员、设备与场景',
+  },
+  schedule: {
+    title: '任务调度',
+    description: '支持手动排期与自动化调度；调度区按场地/人员泳道呈现大规模并行任务，快速定位阻塞与异常',
+  },
+}
 
 const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   to_schedule: '待调度',
@@ -118,32 +129,6 @@ function priorityPillClass(p: TaskPriority | undefined): string {
       return 'bg-sky-50 text-sky-800 ring-sky-200'
     default:
       return 'bg-slate-100 text-slate-700 ring-slate-200'
-  }
-}
-
-function priorityBlockClass(priority: TaskPriority | undefined): string {
-  switch (priority) {
-    case 'high':
-      return 'border-rose-300 bg-gradient-to-br from-rose-50 to-orange-50 text-rose-950 shadow-sm shadow-rose-200/40'
-    case 'medium':
-      return 'border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50 text-amber-950 shadow-sm shadow-amber-200/30'
-    case 'low':
-      return 'border-sky-200 bg-gradient-to-br from-sky-50 to-cyan-50 text-sky-950 shadow-sm shadow-sky-200/30'
-    default:
-      return 'border-border bg-white text-text'
-  }
-}
-
-function priorityDotClass(priority: TaskPriority | undefined): string {
-  switch (priority) {
-    case 'high':
-      return 'bg-rose-500'
-    case 'medium':
-      return 'bg-amber-500'
-    case 'low':
-      return 'bg-sky-500'
-    default:
-      return 'bg-slate-400'
   }
 }
 
@@ -303,9 +288,24 @@ function ReadinessDetailCard({
 // ---------------------------------------------------------------------------
 
 export default function Tasks(): ReactElement {
+  const { tab: tabParam } = useParams<{ tab: string }>()
+  const activeTab: TaskTab = TASK_TABS.includes(tabParam as TaskTab)
+    ? (tabParam as TaskTab)
+    : 'list'
+  const tabMeta = TASK_TAB_META[activeTab]
+  const invalidTab = tabParam !== undefined && !TASK_TABS.includes(tabParam as TaskTab)
   const [tasks, setTasks] = useState<Task[]>(() =>
     mockTasks.map((t) => ({ ...t })),
   )
+  const [taskScripts, setTaskScripts] = useState<TaskScript[]>(() =>
+    mockTaskScripts.map((s) => ({
+      ...s,
+      propIds: [...s.propIds],
+      atomicActionIds: [...(s.atomicActionIds ?? [])],
+      steps: s.steps.map((step) => ({ ...step })),
+    })),
+  )
+  const [platformProps, setPlatformProps] = usePlatformProps()
   const [requirements, setRequirements] = useState<Requirement[]>(() =>
     mockRequirements.map((r) => ({
       ...r,
@@ -318,18 +318,15 @@ export default function Tasks(): ReactElement {
     })),
   )
 
-  const [activeTab, setActiveTab] = useState<string>('list')
   const [search, setSearch] = useState<string>('')
   const [activeFilters, setActiveFilters] = useState<Record<string, string>>({
     status: 'all',
     readiness: 'all',
   })
   const [detailTask, setDetailTask] = useState<Task | null>(null)
+  const [detailScriptWizard, setDetailScriptWizard] = useState<ScriptWizardStep>('configure')
+  const [exceptionFixDraft, setExceptionFixDraft] = useState<string>('')
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
-  const [expandedScriptIds, setExpandedScriptIds] = useState<Set<string>>(
-    () => new Set(),
-  )
-
   // 任务拆解 Tab
   const [selectedReqId, setSelectedReqId] = useState<string>(
     () =>
@@ -344,20 +341,30 @@ export default function Tasks(): ReactElement {
   const [resourceKeyword, setResourceKeyword] = useState<string>('')
   const [resourceOnlyAvailable, setResourceOnlyAvailable] = useState<boolean>(true)
   const [resourceShowAll, setResourceShowAll] = useState<boolean>(false)
+  const [decompositionWizardStep, setDecompositionWizardStep] = useState<1 | 2 | 3>(1)
+
+  useEffect(() => {
+    setDecompositionWizardStep(1)
+  }, [activeDraftId])
 
   // 任务调度 Tab（手动：仅排时间窗，人/设备/场已在拆解阶段绑定）
   const [scheduleSelectedIds, setScheduleSelectedIds] = useState<string[]>([])
   const [scheduleFormStart, setScheduleFormStart] = useState<string>('2025-04-02T09:00')
   const [scheduleFormEnd, setScheduleFormEnd] = useState<string>('2025-04-02T12:00')
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null)
+  const [autoScheduleEnabled, setAutoScheduleEnabled] = useState(false)
+  const [autoScheduleLastRun, setAutoScheduleLastRun] = useState<string | null>(null)
+  const [autoScheduleLog, setAutoScheduleLog] = useState<string[]>([])
+  const [scheduleDemoScale, setScheduleDemoScale] = useState(true)
+  const venues = usePlatformVenues()
 
   // ---------- 派生数据 ----------
 
   const taskReadiness = useMemo(() => {
     const m = new Map<string, TaskReadiness>()
-    for (const t of tasks) m.set(t.id, computeReadiness(t))
+    for (const t of tasks) m.set(t.id, computeReadiness(t, taskScripts))
     return m
-  }, [tasks])
+  }, [tasks, taskScripts])
 
   const requirementById = useMemo(() => {
     const m = new Map<string, Requirement>()
@@ -406,26 +413,10 @@ export default function Tasks(): ReactElement {
     return taskUnits.filter((t) => t.status === 'to_schedule')
   }, [taskUnits])
 
-  const scheduledTaskUnitsForTimeline = useMemo(() => {
-    return taskUnits.filter((t) =>
-      ['scheduled', 'ready', 'in_progress', 'completed', 'closed'].includes(t.status),
-    )
-  }, [taskUnits])
-
-  const scheduleBounds = useMemo(() => {
-    const times = scheduledTaskUnitsForTimeline.flatMap((t) => [
-      new Date(t.startTime).getTime(),
-      new Date(t.endTime).getTime(),
-    ])
-    if (times.length === 0) {
-      const anchor = new Date('2025-03-26T00:00:00+08:00').getTime()
-      const week = 7 * 24 * 60 * 60 * 1000
-      return { min: anchor, max: anchor + week, range: week }
-    }
-    const min = Math.min(...times)
-    const max = Math.max(...times)
-    return { min, max, range: Math.max(max - min, 60 * 60 * 1000) }
-  }, [scheduledTaskUnitsForTimeline])
+  const scheduleBoardTasks = useMemo(() => {
+    if (!scheduleDemoScale) return taskUnits
+    return [...taskUnits, ...generateDemoScheduleTasks(taskUnits, 72)]
+  }, [taskUnits, scheduleDemoScale])
 
   const statusFilterDef: SearchFilterDef = useMemo(
     () => ({
@@ -473,19 +464,6 @@ export default function Tasks(): ReactElement {
     })
   }, [search, activeFilters.status, activeFilters.readiness, taskReadiness, taskUnits])
 
-  const sceneById = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const s of mockScenes) m.set(s.id, s.name)
-    return m
-  }, [])
-
-  const tabs: TabItem[] = [
-    { key: 'list', label: '任务列表' },
-    { key: 'decomposition', label: '任务拆解' },
-    { key: 'schedule', label: '任务调度' },
-    { key: 'scripts', label: '台本详情' },
-  ]
-
   const tableColumns: DataTableColumn<Task>[] = useMemo(
     () => [
       { key: 'id', title: '任务ID' },
@@ -531,6 +509,35 @@ export default function Tasks(): ReactElement {
         },
       },
       {
+        key: 'scriptAlert',
+        title: '台本预警',
+        render: (row) => {
+          if (row.scriptException?.status === 'open') {
+            return (
+              <span className="inline-flex rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-800 ring-1 ring-inset ring-rose-200">
+                道具异常
+              </span>
+            )
+          }
+          const script = row.scriptId
+            ? taskScripts.find((s) => s.taskId === row.scriptId)
+            : undefined
+          if (!script) return '—'
+          if (script.status === 'draft') {
+            return (
+              <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-900 ring-1 ring-inset ring-amber-200">
+                待确认
+              </span>
+            )
+          }
+          return (
+            <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 ring-1 ring-inset ring-emerald-200">
+              已绑定
+            </span>
+          )
+        },
+      },
+      {
         key: 'startTime',
         title: '计划时间',
         render: (row) => (
@@ -540,13 +547,28 @@ export default function Tasks(): ReactElement {
         ),
       },
     ],
-    [taskReadiness],
+    [taskReadiness, taskScripts],
   )
 
   function toggleScheduleTaskSelect(taskId: string): void {
     setScheduleSelectedIds((prev) =>
       prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId],
     )
+  }
+
+  function runAutoScheduleNow(): void {
+    const result = runAutoSchedule(tasks, taskScripts)
+    setTasks(result.nextTasks)
+    setRequirements((prev) => syncRequirementsByTasks(prev, result.nextTasks))
+    setAutoScheduleLastRun(new Date().toISOString())
+    setAutoScheduleLog(result.logLines)
+    const msg =
+      result.scheduledIds.length > 0
+        ? `自动调度完成：${result.scheduledIds.length} 条已排期${
+            result.skipped.length > 0 ? `，${result.skipped.length} 条跳过` : ''
+          }`
+        : '无满足条件的待调度任务可自动排期'
+    setScheduleMessage(msg)
   }
 
   function submitManualSchedule(): void {
@@ -568,6 +590,18 @@ export default function Tasks(): ReactElement {
       setScheduleMessage('计划结束时间必须晚于开始时间。')
       return
     }
+    const unconfirmed = targets.filter((id) => {
+      const task = tasks.find((t) => t.id === id)
+      if (!task?.scriptId) return true
+      const script = taskScripts.find((s) => s.taskId === task.scriptId)
+      return !isScriptSchedulable(script)
+    })
+    if (unconfirmed.length > 0) {
+      setScheduleMessage(
+        `闸口未通过：${unconfirmed.join('、')} 台本未确认绑定，不可进入调度。`,
+      )
+      return
+    }
     const startIso = start.toISOString()
     const endIso = end.toISOString()
     const targetSet = new Set(targets)
@@ -582,27 +616,6 @@ export default function Tasks(): ReactElement {
     setScheduleMessage(
       `已提交手动调度：${targets.length} 条任务单元 待调度 → 已排期（${formatDateTime(startIso)} → ${formatDateTime(endIso)}）`,
     )
-  }
-
-  function toggleScriptExpanded(taskId: string): void {
-    setExpandedScriptIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(taskId)) next.delete(taskId)
-      else next.add(taskId)
-      return next
-    })
-  }
-
-  function scriptPersonnelNames(script: TaskScript): string {
-    return script.personnelIds
-      .map((id) => mockPersonnel.find((p) => p.id === id)?.name ?? id)
-      .join('、')
-  }
-
-  function scriptDeviceNames(script: TaskScript): string {
-    return script.deviceIds
-      .map((id) => mockDevices.find((d) => d.id === id)?.name ?? id)
-      .join('、')
   }
 
   function buildDraftUnit(seed: number, baseType: string): DecompositionDraftUnit {
@@ -749,6 +762,8 @@ export default function Tasks(): ReactElement {
     const newTasks: Task[] = decompositionDrafts.map((unit) => {
       numericMax += 1
       const nextId = `task-${String(numericMax).padStart(3, '0')}`
+      const scriptKey = unit.scriptId.trim() || unit.id
+      const hasScript = taskScripts.some((s) => s.taskId === scriptKey)
       const person = mockPersonnel.find((p) => p.id === unit.personnelId)
       const device = mockDevices.find((d) => d.id === unit.deviceId)
       const scene = mockScenes.find((s) => s.id === unit.sceneId)
@@ -761,7 +776,7 @@ export default function Tasks(): ReactElement {
         personnelId: unit.personnelId,
         deviceId: unit.deviceId,
         sceneId: unit.sceneId,
-        scriptId: unit.scriptId.trim() || undefined,
+        scriptId: hasScript ? nextId : undefined,
         personnel: person?.name ?? unit.personnelId,
         device: device?.name ?? unit.deviceId,
         scene: scene?.name ?? unit.sceneId,
@@ -769,6 +784,32 @@ export default function Tasks(): ReactElement {
         endTime: new Date(unit.endTime).toISOString(),
       }
     })
+
+    if (decompositionDrafts.some((unit) => {
+      const scriptKey = unit.scriptId.trim() || unit.id
+      const script = taskScripts.find((s) => s.taskId === scriptKey)
+      return script !== undefined && !isScriptSchedulable(script)
+    })) {
+      setDecompositionMessage('存在未确认绑定的台本，请确认后再入库（任务可入库但不可调度）。')
+    }
+
+    setTaskScripts((prev) =>
+      prev.map((script) => {
+        const draftUnit = decompositionDrafts.find(
+          (unit) => unit.scriptId.trim() === script.taskId || unit.id === script.taskId,
+        )
+        if (!draftUnit) return script
+        const taskIndex = decompositionDrafts.indexOf(draftUnit)
+        const nextTaskId = newTasks[taskIndex]?.id
+        if (!nextTaskId) return script
+        return {
+          ...script,
+          taskId: nextTaskId,
+          personnelIds: draftUnit.personnelId ? [draftUnit.personnelId] : script.personnelIds,
+          deviceIds: draftUnit.deviceId ? [draftUnit.deviceId] : script.deviceIds,
+        }
+      }),
+    )
 
     const newIds = newTasks.map((task) => task.id)
     const nextTasks = [...newTasks, ...tasks]
@@ -789,9 +830,76 @@ export default function Tasks(): ReactElement {
     setDecompositionMessage(`已生成 ${newTasks.length} 条任务单元并写入任务管理。`)
   }
 
+  function applyExceptionScriptFix(taskId: string): void {
+    const task = tasks.find((t) => t.id === taskId)
+    if (!task?.scriptId || !task.scriptException) return
+    const script = taskScripts.find((s) => s.taskId === task.scriptId)
+    if (!script) return
+
+    const instruction =
+      exceptionFixDraft.trim() ||
+      script.instruction ||
+      '运营已根据现场道具更新台本说明。'
+
+    const fixed = applyOpsScriptFix(
+      script,
+      {
+        instruction,
+        propIds: script.propIds,
+        atomicActionIds: script.atomicActionIds ?? [],
+      },
+      '运营-张敏',
+    )
+
+    setTaskScripts((prev) =>
+      prev.map((s) => (s.taskId === fixed.taskId ? fixed : s)),
+    )
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId && t.scriptException
+          ? {
+              ...t,
+              scriptException: { ...t.scriptException, status: 'resolved' },
+            }
+          : t,
+      ),
+    )
+    setDetailTask((prev) =>
+      prev?.id === taskId && prev.scriptException
+        ? { ...prev, scriptException: { ...prev.scriptException, status: 'resolved' } }
+        : prev,
+    )
+    setTransitionMessage(
+      '台本已现场更新并放行：采集员可直接在异常任务上继续执行，无需重新确认道具。',
+    )
+  }
+
+  function taskNeedsScriptBinding(task: Task): boolean {
+    if (task.sceneId === undefined || task.sceneId === '') return false
+    if (task.scriptId === undefined || task.scriptId === '') return true
+    const script = taskScripts.find((s) => s.taskId === task.scriptId)
+    return !isScriptSchedulable(script)
+  }
+
+  function bindScriptToTask(taskId: string, scriptTaskId: string): void {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, scriptId: scriptTaskId } : t)),
+    )
+    setDetailTask((prev) =>
+      prev?.id === taskId ? { ...prev, scriptId: scriptTaskId } : prev,
+    )
+    setDetailScriptWizard('configure')
+    setTransitionMessage('台本已确认绑定，「事」要素就绪，可继续推进调度。')
+  }
+
   function openTaskDetail(task: Task): void {
     setDetailTask(task)
     setTransitionMessage(null)
+    setDetailScriptWizard('configure')
+    const script = task.scriptId
+      ? taskScripts.find((s) => s.taskId === task.scriptId)
+      : undefined
+    setExceptionFixDraft(script?.instruction ?? '')
   }
 
   function syncRequirementsByTasks(prev: Requirement[], nextTasks: Task[]): Requirement[] {
@@ -853,6 +961,12 @@ export default function Tasks(): ReactElement {
       if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
         return '闸口未通过：开始/结束时间非法，无法进入已排期。'
       }
+      const script = task.scriptId
+        ? taskScripts.find((s) => s.taskId === task.scriptId)
+        : undefined
+      if (!isScriptSchedulable(script)) {
+        return '闸口未通过：台本未确认绑定，不可进入调度。'
+      }
     }
     if (nextStatus === 'ready' && (task.requirementId === undefined || task.requirementId === '')) {
       return '闸口未通过：进入待执行前需关联需求（requirementId）。'
@@ -892,6 +1006,8 @@ export default function Tasks(): ReactElement {
   // ---------- 任务拆解 Tab 内部组件 ----------
 
   function renderDecompositionTab(): ReactElement {
+    const activeDraft =
+      decompositionDrafts.find((unit) => unit.id === activeDraftId) ?? null
     const timeWindowOptions = [
       { id: 'w1', label: '上午档 09:00-12:00', startTime: '2025-04-02T09:00', endTime: '2025-04-02T12:00' },
       { id: 'w2', label: '下午档 13:30-17:00', startTime: '2025-04-02T13:30', endTime: '2025-04-02T17:00' },
@@ -1006,7 +1122,7 @@ export default function Tasks(): ReactElement {
                     <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs text-text-secondary">
                       <li>系统按需求约束（关键约束/目标类型）生成多条任务单元草案。</li>
                       <li>中间面板可复制任务单元、批量改优先级、微调任务类型。</li>
-                      <li>右侧资源面板点选后立即指派到选中任务单元（人/设备/场/时间窗）。</li>
+                      <li>右侧按三步向导：①资源指派 → ②台本配置（AI/人工）→ ③确认绑定。</li>
                     </ol>
                   </div>
                 </div>
@@ -1176,8 +1292,60 @@ export default function Tasks(): ReactElement {
             )}
           </section>
 
-          <section className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-text">资源指派面板（4 类）</h3>
+          <section className="space-y-4">
+            {activeDraft ? (
+              <div className="rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm">
+                <p className="mb-2 text-[11px] font-medium text-text-secondary">拆解向导</p>
+                <div className="flex gap-1">
+                  {([
+                    [1, '① 资源指派'],
+                    [2, '② 台本配置'],
+                    [3, '③ 确认绑定'],
+                  ] as const).map(([step, label]) => (
+                    <button
+                      key={step}
+                      type="button"
+                      onClick={() => setDecompositionWizardStep(step)}
+                      className={cn(
+                        'flex-1 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors',
+                        decompositionWizardStep === step
+                          ? 'bg-primary text-white'
+                          : 'bg-slate-100 text-text-secondary hover:bg-slate-200',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border bg-slate-50/50 p-4 text-xs text-text-secondary">
+                选中任务单元后，右侧按三步完成资源指派与台本绑定。
+              </div>
+            )}
+
+            {activeDraft && decompositionWizardStep >= 2 && (
+              <ScriptConfigPanel
+                taskId={activeDraft.id}
+                taskType={activeDraft.type || '人体数据采集'}
+                sceneId={activeDraft.sceneId}
+                scripts={taskScripts}
+                props={platformProps}
+                wizardStep={decompositionWizardStep === 2 ? 'configure' : 'confirm'}
+                onPropsChange={setPlatformProps}
+                onScriptsChange={setTaskScripts}
+                boundScriptId={activeDraft.scriptId || activeDraft.id}
+                onBindScript={(scriptTaskId) =>
+                  updateDraftUnit(activeDraft.id, { scriptId: scriptTaskId })
+                }
+                onConfigureComplete={() => setDecompositionWizardStep(3)}
+                onGoBack={() => setDecompositionWizardStep(2)}
+              />
+            )}
+
+            {activeDraft && decompositionWizardStep === 1 && (
+            <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-text">① 资源指派（4 类）</h3>
             <p className="text-xs text-text-secondary">
               先在中间勾选任务单元（可多选），再在此检索并点选资源或时间窗批量指派。
             </p>
@@ -1367,6 +1535,16 @@ export default function Tasks(): ReactElement {
                 ))
               })()}
             </div>
+            <button
+              type="button"
+              onClick={() => setDecompositionWizardStep(2)}
+              disabled={!activeDraft.sceneId}
+              className="mt-3 w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+            >
+              下一步：台本配置
+            </button>
+            </div>
+            )}
           </section>
         </div>
       </div>
@@ -1375,17 +1553,15 @@ export default function Tasks(): ReactElement {
 
   // ---------- 渲染 ----------
 
+  if (invalidTab) {
+    return <Navigate to="/tasks/list" replace />
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-text">任务管理</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          仅管理已拆解需求生成的任务单元（任务列表、拆解面板、调度看板与采集台本）
-        </p>
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-        <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
+        <h1 className="text-xl font-semibold tracking-tight text-text">{tabMeta.title}</h1>
+        <p className="mt-1 text-sm text-text-secondary">{tabMeta.description}</p>
       </div>
 
       {activeTab === 'list' && (
@@ -1412,11 +1588,78 @@ export default function Tasks(): ReactElement {
 
       {activeTab === 'schedule' && (
         <div className="space-y-6">
-          <div className="rounded-xl border border-dashed border-primary/30 bg-primary/[0.03] px-4 py-3 text-sm text-text-secondary">
-            <span className="font-medium text-text">手动调度（本期）：</span>
-            人 / 设备 / 场地已在「任务拆解」绑定。此处仅勾选待调度任务单元，填写计划时间窗后提交，状态将变为
-            <span className="font-medium text-text"> 已排期</span>。
-          </div>
+          <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-text">调度模式</h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  人 / 设备 / 场地已在「任务拆解」绑定。开启自动化后，系统将基于空闲状态动态生成排期建议（原型演示）；运营可随时人工覆盖。
+                </p>
+              </div>
+              <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-slate-50 px-3 py-2">
+                <span className="text-xs font-medium text-text">自动化调度</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoScheduleEnabled}
+                  onClick={() => setAutoScheduleEnabled((v) => !v)}
+                  className={cn(
+                    'relative h-6 w-11 rounded-full transition-colors',
+                    autoScheduleEnabled ? 'bg-primary' : 'bg-slate-300',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform',
+                      autoScheduleEnabled ? 'left-[22px]' : 'left-0.5',
+                    )}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {autoScheduleEnabled && (
+              <div className="mt-3 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-3 text-xs">
+                <p className="font-medium text-text">自动调度策略（规划）</p>
+                <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-text-secondary">
+                  <li>优先匹配空闲的人员、设备、室级场地与场景库</li>
+                  <li>避开维护窗口与已占用时段，高优先级任务优先占槽</li>
+                  <li>生成排期后写入调度区；阻塞任务保留在「需介入」队列待人工处理</li>
+                </ul>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={runAutoScheduleNow}
+                    className="rounded-lg bg-primary px-3 py-1.5 font-medium text-white hover:bg-primary/90"
+                  >
+                    立即运行自动调度
+                  </button>
+                  {autoScheduleLastRun && (
+                    <span className="text-text-secondary">
+                      上次运行 {formatDateTime(autoScheduleLastRun)}
+                    </span>
+                  )}
+                </div>
+                {autoScheduleLog.length > 0 && (
+                  <ul className="mt-2 max-h-24 space-y-0.5 overflow-y-auto font-mono text-[11px] text-emerald-800">
+                    {autoScheduleLog.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <label className="mt-3 inline-flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                checked={scheduleDemoScale}
+                onChange={(e) => setScheduleDemoScale(e.target.checked)}
+                className="size-3.5"
+              />
+              调度区加载大规模演示数据（模拟多场地并行采集，不影响真实任务数据）
+            </label>
+          </section>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -1497,9 +1740,11 @@ export default function Tasks(): ReactElement {
             </section>
 
             <section className="space-y-3 rounded-xl border border-border bg-card p-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-text">计划时间窗</h3>
+              <h3 className="text-sm font-semibold text-text">
+                {autoScheduleEnabled ? '人工覆盖 · 计划时间窗' : '手动调度 · 计划时间窗'}
+              </h3>
               <p className="text-xs text-text-secondary">
-                将应用于下方勾选的每条「待调度」任务单元；提交后统一进入已排期。
+                将应用于勾选的「待调度」任务；与自动调度并存，用于运营人工介入重排。
               </p>
               <label className="block text-xs text-text-secondary">
                 计划开始
@@ -1534,218 +1779,19 @@ export default function Tasks(): ReactElement {
             </section>
           </div>
 
-          <section className="overflow-hidden rounded-xl border-2 border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100/80 p-4 shadow-inner">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-text">调度区</h2>
-              <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-secondary">
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      'size-2 rounded-full',
-                      priorityDotClass('high'),
-                    )}
-                  />
-                  高
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      'size-2 rounded-full',
-                      priorityDotClass('medium'),
-                    )}
-                  />
-                  中
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      'size-2 rounded-full',
-                      priorityDotClass('low'),
-                    )}
-                  />
-                  低
-                </span>
-                <span className="inline-flex items-center gap-1 border-l border-border pl-3">
-                  <Play className="size-3.5 text-emerald-600" />
-                  已排期
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <Pause className="size-3.5 text-amber-600" />
-                  对照图例
-                </span>
-              </div>
-            </div>
-
-            <div className="relative h-36 rounded-lg border border-slate-200/80 bg-white shadow-sm">
-              <div className="absolute inset-x-0 top-0 flex justify-between border-b border-slate-100 px-2 py-1 text-[10px] text-text-secondary">
-                <span>{formatDateTime(new Date(scheduleBounds.min).toISOString())}</span>
-                <span>{formatDateTime(new Date(scheduleBounds.max).toISOString())}</span>
-              </div>
-              <div className="absolute inset-x-2 bottom-2 top-8">
-                <div className="relative h-full rounded-md bg-slate-50/80 ring-1 ring-inset ring-slate-200/60">
-                  {scheduledTaskUnitsForTimeline.map((task) => {
-                    const start = new Date(task.startTime).getTime()
-                    const end = new Date(task.endTime).getTime()
-                    if (Number.isNaN(start) || Number.isNaN(end)) return null
-                    const left =
-                      ((start - scheduleBounds.min) / scheduleBounds.range) * 100
-                    const width = Math.max(
-                      ((end - start) / scheduleBounds.range) * 100,
-                      2,
-                    )
-                    const sceneName =
-                      task.sceneId !== undefined && task.sceneId !== ''
-                        ? (sceneById.get(task.sceneId) ?? task.scene)
-                        : task.scene
-                    const isRunning = task.status === 'in_progress'
-                    const pr = task.priority
-                    return (
-                      <div
-                        key={`${task.id}-${task.startTime}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openTaskDetail(task)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            openTaskDetail(task)
-                          }
-                        }}
-                        className={cn(
-                          'absolute top-2 flex h-[calc(100%-16px)] min-w-[72px] cursor-pointer flex-col justify-center overflow-hidden rounded-md border px-2 py-1 text-[11px] leading-tight transition-opacity hover:opacity-95',
-                          priorityBlockClass(pr),
-                        )}
-                        style={{
-                          left: `${left}%`,
-                          width: `${width}%`,
-                        }}
-                        title={`${task.id} · ${sceneName}`}
-                      >
-                        <div className="flex items-center gap-1 font-semibold">
-                          <span
-                            className={cn(
-                              'size-1.5 shrink-0 rounded-full',
-                              priorityDotClass(pr),
-                            )}
-                          />
-                          <span className="truncate font-mono">{task.id}</span>
-                          {isRunning ? (
-                            <Play className="ml-auto size-3 shrink-0 text-emerald-700" />
-                          ) : task.status === 'to_schedule' ? (
-                            <Pause className="ml-auto size-3 shrink-0 text-amber-700" />
-                          ) : null}
-                        </div>
-                        <p className="truncate opacity-90">{task.type}</p>
-                        <p className="truncate text-[10px] opacity-80">
-                          {sceneName}
-                        </p>
-                        <p className="truncate font-mono text-[10px] opacity-75">
-                          {formatDateTime(task.startTime)} —{' '}
-                          {formatDateTime(task.endTime)}
-                        </p>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
+          <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <h2 className="mb-1 text-sm font-semibold text-text">调度区</h2>
+            <p className="mb-4 text-xs text-text-secondary">
+              按场地或人员泳道查看并行任务；顶部 KPI 与「需介入」队列帮助在大规模采集中快速定位阻塞与异常。
+            </p>
+            <ScheduleBoard
+              tasks={scheduleBoardTasks}
+              venues={venues}
+              readinessMap={taskReadiness}
+              demoScale={scheduleDemoScale}
+              onTaskClick={openTaskDetail}
+            />
           </section>
-        </div>
-      )}
-
-      {activeTab === 'scripts' && (
-        <div className="space-y-4">
-          {mockTaskScripts.map((script) => {
-            const open = expandedScriptIds.has(script.taskId)
-            return (
-              <div
-                key={script.taskId}
-                className="overflow-hidden rounded-xl border border-border bg-card shadow-sm"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleScriptExpanded(script.taskId)}
-                  className="flex w-full items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-slate-50/80"
-                >
-                  <ChevronRight
-                    className={cn(
-                      'mt-0.5 size-5 shrink-0 text-text-secondary transition-transform',
-                      open && 'rotate-90',
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-text">{script.title}</h3>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-secondary">
-                      <span className="inline-flex items-center gap-1.5">
-                        <Clock className="size-3.5" />
-                        {formatDateTime(script.scheduledTime)}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5">
-                        <User className="size-3.5" />
-                        {scriptPersonnelNames(script)}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5">
-                        <Cpu className="size-3.5" />
-                        {scriptDeviceNames(script)}
-                      </span>
-                    </div>
-                  </div>
-                </button>
-
-                {open && (
-                  <div className="border-t border-border bg-white px-4 pb-6 pt-2">
-                    <p className="mb-4 text-xs font-medium uppercase tracking-wide text-text-secondary">
-                      台本步骤
-                    </p>
-                    <ol className="space-y-0">
-                      {script.steps.map((step, idx) => {
-                        const isLast = idx === script.steps.length - 1
-                        return (
-                          <li key={step.order} className="relative flex gap-4">
-                            <div className="flex flex-col items-center">
-                              <div
-                                className={cn(
-                                  'flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-bold',
-                                  'bg-primary/10 text-primary ring-2 ring-primary/25',
-                                )}
-                              >
-                                {step.order}
-                              </div>
-                              {!isLast && (
-                                <div
-                                  className="w-px flex-1 min-h-10 bg-border"
-                                  aria-hidden
-                                />
-                              )}
-                            </div>
-                            <div
-                              className={cn(
-                                'min-w-0 flex-1 pb-8',
-                                isLast && 'pb-0',
-                              )}
-                            >
-                              <p className="font-medium text-text">
-                                {step.operation}
-                              </p>
-                              <p className="mt-1 inline-flex items-center gap-1.5 text-sm text-text-secondary">
-                                <Clock className="size-3.5" />
-                                时长 {step.durationMinutes} 分钟
-                              </p>
-                              {step.notes ? (
-                                <p className="mt-2 rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-sm text-amber-950">
-                                  备注：{step.notes}
-                                </p>
-                              ) : null}
-                            </div>
-                          </li>
-                        )
-                      })}
-                    </ol>
-                  </div>
-                )}
-              </div>
-            )
-          })}
         </div>
       )}
 
@@ -1756,7 +1802,7 @@ export default function Tasks(): ReactElement {
           setTransitionMessage(null)
         }}
         title={detailTask ? `任务详情 · ${detailTask.id}` : '任务详情'}
-        size="lg"
+        size={detailTask && taskNeedsScriptBinding(detailTask) ? 'xl' : 'lg'}
       >
         {detailTask && (
           <div className="space-y-4">
@@ -1819,7 +1865,89 @@ export default function Tasks(): ReactElement {
               </div>
             )}
 
-            <ReadinessDetailCard readiness={computeReadiness(detailTask)} />
+            <ReadinessDetailCard readiness={computeReadiness(detailTask, taskScripts)} />
+
+            {detailTask.sceneId === undefined || detailTask.sceneId === '' ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                「事」要素需先指派场景库后才能配置台本。请前往
+                <span className="font-medium"> 任务拆解 </span>
+                为该任务单元指派场地。
+              </div>
+            ) : taskNeedsScriptBinding(detailTask) ? (
+              <div className="space-y-3 rounded-lg border border-primary/25 bg-primary/[0.03] p-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-text">台本配置（任务详情补绑）</h4>
+                  <p className="mt-0.5 text-xs text-text-secondary">
+                    此任务台本未确认绑定，无法推进至已排期。可在此直接配置并确认，无需返回拆解页。
+                  </p>
+                </div>
+                <div className="flex gap-1 rounded-md bg-slate-200/60 p-0.5">
+                  {([
+                    ['configure', '① 配置台本'],
+                    ['confirm', '② 确认绑定'],
+                  ] as const).map(([step, label]) => (
+                    <button
+                      key={step}
+                      type="button"
+                      onClick={() => setDetailScriptWizard(step)}
+                      className={cn(
+                        'flex-1 rounded px-2 py-1 text-[11px] font-medium',
+                        detailScriptWizard === step
+                          ? 'bg-white text-primary shadow-sm'
+                          : 'text-text-secondary',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <ScriptConfigPanel
+                  taskId={detailTask.id}
+                  taskType={detailTask.type}
+                  sceneId={detailTask.sceneId}
+                  scripts={taskScripts}
+                  props={platformProps}
+                  wizardStep={detailScriptWizard}
+                  onPropsChange={setPlatformProps}
+                  onScriptsChange={setTaskScripts}
+                  boundScriptId={detailTask.scriptId || detailTask.id}
+                  onBindScript={(scriptTaskId) => bindScriptToTask(detailTask.id, scriptTaskId)}
+                  onConfigureComplete={() => setDetailScriptWizard('confirm')}
+                  onGoBack={() => setDetailScriptWizard('configure')}
+                />
+              </div>
+            ) : null}
+
+            {detailTask.scriptException?.status === 'open' && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-950">
+                <p className="font-medium">台本道具异常（采集员打标）</p>
+                <p className="mt-1 text-xs">{detailTask.scriptException.reason}</p>
+                <p className="mt-1 text-[11px] text-rose-800">
+                  提报人 {detailTask.scriptException.reporter} ·{' '}
+                  {formatDateTime(detailTask.scriptException.reportedAt)}
+                </p>
+                <label className="mt-3 block text-xs font-medium">
+                  运营现场修改台本说明（已知真实道具，直接更新）
+                  <textarea
+                    value={exceptionFixDraft}
+                    onChange={(e) => setExceptionFixDraft(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full rounded-md border border-rose-200 bg-white px-2 py-1.5 text-xs text-text"
+                    placeholder="例：现场使用 12cm 可调门槛，更新演示步骤…"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => applyExceptionScriptFix(detailTask.id)}
+                  className="mt-2 rounded-md bg-rose-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-800"
+                >
+                  保存台本修改并放行采集
+                </button>
+                <p className="mt-2 text-[11px] text-rose-800">
+                  采集员无需重新确认道具，可直接在已报异常的任务台本上继续执行。
+                </p>
+              </div>
+            )}
 
             <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {(
@@ -1857,6 +1985,15 @@ export default function Tasks(): ReactElement {
                     detailTask.scriptId !== undefined && detailTask.scriptId !== '' ? (
                       <span key="sc" className="font-mono text-xs">
                         {detailTask.scriptId}
+                        {(() => {
+                          const script = taskScripts.find((s) => s.taskId === detailTask.scriptId)
+                          if (!script) return null
+                          return (
+                            <span className="ml-2 text-[11px] text-text-secondary">
+                              · {script.status === 'confirmed' ? '已确认绑定' : '待确认'}
+                            </span>
+                          )
+                        })()}
                       </span>
                     ) : (
                       <span key="sc" className="text-xs text-rose-700">未绑定</span>
@@ -1874,6 +2011,22 @@ export default function Tasks(): ReactElement {
                 </div>
               ))}
             </dl>
+
+            {(() => {
+              const script =
+                detailTask.scriptId !== undefined && detailTask.scriptId !== ''
+                  ? taskScripts.find((s) => s.taskId === detailTask.scriptId)
+                  : undefined
+              if (!script) return null
+              return (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+                    台本内容
+                  </h4>
+                  <ScriptContentCard script={script} props={platformProps} />
+                </div>
+              )
+            })()}
 
             {detailTask.blockReason !== undefined && (
               <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm text-amber-900">

@@ -8,8 +8,12 @@ import {
   StatusBadge,
 } from '@/components/ui'
 import { mockScenes, type Scene, type SceneStatus } from '@/data/mock'
+import { usePlatformProps } from '@/data/propStore'
+import { updatePlatformScenes, usePlatformScenes } from '@/data/sceneStore'
+import { usePlatformScriptTemplates } from '@/data/scriptTemplateStore'
+import { roomVenues, usePlatformVenues, venuePathLabel } from '@/data/venueStore'
 import { cn } from '@/lib/utils'
-import { ChevronRight, Download, FileUp, MapPin, Plus } from 'lucide-react'
+import { ChevronRight, Download, FileUp, MapPin, Pencil, Plus } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
 function sceneStatusLabel(status: SceneStatus): string {
@@ -101,11 +105,14 @@ function parseSceneCsv(text: string): SceneImportRow[] {
 }
 
 export default function Scenes(): ReactElement {
-  const [scenes, setScenes] = useState<Scene[]>(() =>
-    mockScenes.map((s) => ({ ...s })),
-  )
+  const scenes = usePlatformScenes()
+  const venues = usePlatformVenues()
+  const [platformProps] = usePlatformProps()
+  const templates = usePlatformScriptTemplates()
+  const roomOptions = useMemo(() => roomVenues(venues), [venues])
   const [search, setSearch] = useState<string>('')
   const [activeFilters, setActiveFilters] = useState<Record<string, string>>({
+    venueId: '',
     industry: '',
     type: '',
     sceneSubtype: '',
@@ -114,16 +121,21 @@ export default function Scenes(): ReactElement {
   const [importPreview, setImportPreview] = useState<SceneImportRow[] | null>(null)
   const [importMessage, setImportMessage] = useState<string | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false)
   const [draftScene, setDraftScene] = useState<Scene>({
     id: '',
     name: '',
+    venueId: mockScenes[0]?.venueId ?? '',
     industry: '',
     type: '',
     sceneSubtype: '',
     status: 'active',
     location: '',
     description: '',
+    recommendedPropIds: [],
+    defaultTemplateId: undefined,
   })
+  const [editScene, setEditScene] = useState<Scene | null>(null)
 
   const industryOptions = useMemo(() => industryFilterOptions(scenes), [scenes])
   const typeOptions = useMemo(() => typeFilterOptions(scenes), [scenes])
@@ -131,6 +143,14 @@ export default function Scenes(): ReactElement {
 
   const filterDefs: SearchFilterDef[] = useMemo(
     () => [
+      {
+        key: 'venueId',
+        label: '所属场地',
+        options: [
+          { value: '', label: '全部场地（室）' },
+          ...roomOptions.map((v) => ({ value: v.id, label: venuePathLabel(venues, v.id) })),
+        ],
+      },
       {
         key: 'industry',
         label: '全部行业',
@@ -157,7 +177,7 @@ export default function Scenes(): ReactElement {
         ],
       },
     ],
-    [industryOptions, typeOptions, subtypeOptions],
+    [industryOptions, typeOptions, subtypeOptions, roomOptions, venues],
   )
 
   const activeCount = useMemo(
@@ -184,6 +204,7 @@ export default function Scenes(): ReactElement {
       ) {
         return false
       }
+      if (activeFilters.venueId && s.venueId !== activeFilters.venueId) return false
       if (activeFilters.industry && s.industry !== activeFilters.industry) return false
       if (activeFilters.type && s.type !== activeFilters.type) return false
       if (activeFilters.sceneSubtype && s.sceneSubtype !== activeFilters.sceneSubtype)
@@ -217,18 +238,21 @@ export default function Scenes(): ReactElement {
     }
     let created = 0
     let updated = 0
-    setScenes((prev) =>
+    updatePlatformScenes((prev) =>
       valid.reduce<Scene[]>((acc, row) => {
         const idx = acc.findIndex((s) => s.id === row.id)
         const payload: Scene = {
           id: row.id,
           name: row.name ?? '',
+          venueId: roomOptions[0]?.id ?? '',
           industry: row.industry ?? '',
           type: row.type ?? '',
           sceneSubtype: row.sceneSubtype ?? '',
           status: row.status ?? 'active',
           location: row.location ?? '',
           description: row.description ?? '',
+          recommendedPropIds: [],
+          defaultTemplateId: undefined,
         }
         if (idx >= 0) {
           acc[idx] = payload
@@ -248,6 +272,7 @@ export default function Scenes(): ReactElement {
     if (
       draftScene.id.trim() === '' ||
       draftScene.name.trim() === '' ||
+      draftScene.venueId === '' ||
       draftScene.industry.trim() === '' ||
       draftScene.type.trim() === '' ||
       draftScene.sceneSubtype.trim() === '' ||
@@ -261,7 +286,7 @@ export default function Scenes(): ReactElement {
       setImportMessage(`场景 ID ${draftScene.id.trim()} 已存在`)
       return
     }
-    setScenes((prev) => [
+    updatePlatformScenes((prev) => [
       {
         ...draftScene,
         id: draftScene.id.trim(),
@@ -279,18 +304,66 @@ export default function Scenes(): ReactElement {
     setDraftScene({
       id: '',
       name: '',
+      venueId: roomOptions[0]?.id ?? '',
       industry: '',
       type: '',
       sceneSubtype: '',
       status: 'active',
       location: '',
       description: '',
+      recommendedPropIds: [],
+      defaultTemplateId: undefined,
+    })
+  }
+
+  function openEditScene(scene: Scene): void {
+    setEditScene({
+      ...scene,
+      recommendedPropIds: [...scene.recommendedPropIds],
+    })
+    setIsEditModalOpen(true)
+  }
+
+  function saveEditScene(): void {
+    if (editScene === null) return
+    updatePlatformScenes((prev) =>
+      prev.map((s) =>
+        s.id === editScene.id
+          ? {
+              ...editScene,
+              recommendedPropIds: [...editScene.recommendedPropIds],
+            }
+          : s,
+      ),
+    )
+    setIsEditModalOpen(false)
+    setEditScene(null)
+    setImportMessage(`已更新场景 ${editScene.id}`)
+  }
+
+  function toggleEditRecommendedProp(propId: string): void {
+    if (editScene === null) return
+    setEditScene((prev) => {
+      if (prev === null) return prev
+      const ids = prev.recommendedPropIds.includes(propId)
+        ? prev.recommendedPropIds.filter((id) => id !== propId)
+        : [...prev.recommendedPropIds, propId]
+      return { ...prev, recommendedPropIds: ids }
     })
   }
 
   const columns: DataTableColumn<Scene>[] = [
     { key: 'id', title: 'ID' },
     { key: 'name', title: '场景名称' },
+    {
+      key: 'venueId',
+      title: '所属场地（室）',
+      render: (row) => (
+        <span className="text-xs text-text-secondary">
+          {venuePathLabel(venues, row.venueId)}
+        </span>
+      ),
+    },
     {
       key: 'hierarchy',
       title: '层级（行业 → 类型 → 子类型）',
@@ -330,12 +403,49 @@ export default function Scenes(): ReactElement {
         </span>
       ),
     },
+    {
+      key: 'defaultTemplateId',
+      title: '默认台本模板',
+      render: (row) => {
+        const tpl = templates.find((t) => t.id === row.defaultTemplateId)
+        return (
+          <span className="text-xs text-text-secondary">{tpl?.name ?? '—'}</span>
+        )
+      },
+    },
+    {
+      key: 'recommendedProps',
+      title: '推荐道具',
+      render: (row) => (
+        <span className="text-xs text-text-secondary">
+          {row.recommendedPropIds.length > 0
+            ? row.recommendedPropIds
+                .map((id) => platformProps.find((p) => p.id === id)?.name ?? id)
+                .join('、')
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      title: '操作',
+      render: (row) => (
+        <button
+          type="button"
+          onClick={() => openEditScene(row)}
+          className="inline-flex items-center gap-0.5 rounded border border-slate-200 px-2 py-0.5 text-[11px] hover:bg-slate-50"
+        >
+          <Pencil className="size-3" />
+          编辑
+        </button>
+      ),
+    },
   ]
 
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-dashed border-primary/25 bg-primary/[0.03] px-3 py-2 text-xs text-text-secondary">
-        资源池场景按「行业 → 场景类型 → 子类型」三层归类，便于与需求侧 CU 域及任务拆解时的场地筛选对齐。
+        场景库挂在室级场地下（楼栋 → 楼层 → 室）。一室可承载多个场景库，任务拆解与台本配置以场景库为粒度。
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -494,6 +604,23 @@ export default function Scenes(): ReactElement {
               className="w-full rounded-lg border border-border px-3 py-2"
             />
           </label>
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block text-xs text-text-secondary">所属场地（室） *</span>
+            <select
+              value={draftScene.venueId}
+              onChange={(e) =>
+                setDraftScene((prev) => ({ ...prev, venueId: e.target.value }))
+              }
+              className="w-full rounded-lg border border-border px-3 py-2"
+            >
+              <option value="">请选择室级场地</option>
+              {roomOptions.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {venuePathLabel(venues, v.id)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="text-sm">
             <span className="mb-1 block text-xs text-text-secondary">行业</span>
             <input
@@ -579,6 +706,95 @@ export default function Scenes(): ReactElement {
             新增场景
           </button>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={isEditModalOpen && editScene !== null}
+        onClose={() => {
+          setIsEditModalOpen(false)
+          setEditScene(null)
+        }}
+        title="编辑场景库"
+        size="lg"
+      >
+        {editScene && (
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-text-secondary">
+              {editScene.id} · {editScene.name}
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-xs text-text-secondary">默认台本模板</span>
+              <select
+                value={editScene.defaultTemplateId ?? ''}
+                onChange={(e) =>
+                  setEditScene((prev) =>
+                    prev
+                      ? { ...prev, defaultTemplateId: e.target.value || undefined }
+                      : prev,
+                  )
+                }
+                className="h-9 w-full rounded-lg border border-border px-2"
+              >
+                <option value="">不指定（按场景类型自动匹配）</option>
+                {templates
+                  .filter((t) => t.status === 'active')
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <div>
+              <p className="mb-1 text-xs text-text-secondary">
+                推荐道具（台本配置步骤默认展示）
+              </p>
+              <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-border p-2">
+                {platformProps
+                  .filter((p) => p.sceneId === editScene.id)
+                  .map((prop) => (
+                    <button
+                      key={prop.id}
+                      type="button"
+                      onClick={() => toggleEditRecommendedProp(prop.id)}
+                      className={cn(
+                        'rounded-md border px-2 py-0.5 text-[11px]',
+                        editScene.recommendedPropIds.includes(prop.id)
+                          ? 'border-primary/40 bg-primary/10 text-primary'
+                          : 'border-border bg-white text-text-secondary hover:bg-slate-50',
+                      )}
+                    >
+                      {prop.name}
+                    </button>
+                  ))}
+                {platformProps.filter((p) => p.sceneId === editScene.id).length === 0 && (
+                  <span className="text-xs text-text-secondary">
+                    该场景暂无道具，请先在道具管理维护。
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditModalOpen(false)
+                  setEditScene(null)
+                }}
+                className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={saveEditScene}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )
