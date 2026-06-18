@@ -30,7 +30,7 @@ type PropFormState = {
 const EMPTY_FORM: PropFormState = {
   name: '',
   assetCode: '',
-  sceneId: 'scene-001',
+  sceneId: 'scene-chufang',
   category: '',
   quantity: 1,
   requiresApproval: false,
@@ -154,7 +154,7 @@ export default function Props(): ReactElement {
       {
         id: nextId,
         name: '批量导入道具样例',
-        sceneId: 'scene-001',
+        sceneId: 'scene-chufang',
         category: '导入',
         requiresApproval: false,
         approvalStatus: 'none',

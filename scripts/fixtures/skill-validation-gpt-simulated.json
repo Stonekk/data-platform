@@ -1,0 +1,152 @@
+{
+  "tpl-001": {
+    "candidates": [
+      {
+        "card": {
+          "title": "厨房抽屉取放·标准版",
+          "variantHint": "标准版",
+          "relatedTemplateId": "tpl-001",
+          "purpose": "覆盖关节物体操作（开/拉/推/关）与抓取放置轨迹。",
+          "context": "完成一次标准抽屉取放，动作连贯、可复述。",
+          "preparation": {
+            "environment": {
+              "title": "布置光影与环境",
+              "items": [
+                { "text": "打开厨房主灯，保持正常冷白光" },
+                { "text": "台面整洁，无额外反光干扰" }
+              ]
+            },
+            "setup": {
+              "title": "摆放道具",
+              "items": ["汤勺放在抽屉内指定位置；抽屉初始全关"]
+            }
+          },
+          "execution": {
+            "title": "动作执行",
+            "actions": [
+              { "order": 1, "text": "[开] 拉开抽屉至全开并停顿", "primitives": ["开"] },
+              { "order": 2, "text": "[抓起] 汤勺", "primitives": ["抓起"] },
+              { "order": 3, "text": "[放] 汤勺放到台面指定区域", "primitives": ["放"] },
+              { "order": 4, "text": "[关] 推回抽屉确认闭合", "primitives": ["关"] }
+            ]
+          },
+          "redLines": ["拉抽屉时身体勿遮挡第三视角机位"],
+          "difficulty": "complex",
+          "atomicActionIds": ["cat-a", "cat-b"],
+          "propIds": ["prop-001", "prop-002"],
+          "variationTags": ["标准取放"],
+          "perceptionTags": []
+        },
+        "renderedCard": "🚩 任务：厨房抽屉取放·标准版\n🎯 目的：覆盖关节物体操作（开/拉/推/关）与抓取放置轨迹。\n🎬 【导读】 完成一次标准抽屉取放，动作连贯、可复述。\n--- 准备工作（录制前完成） ---\n💡 【布置光影与环境】\n- 打开厨房主灯，保持正常冷白光\n- 台面整洁，无额外反光干扰\n📦 【摆放道具】\n- 汤勺放在抽屉内指定位置；抽屉初始全关\n--- 开始录制（按下录制键） ---\n🛠️ 【动作执行】\n1. [开] 拉开抽屉至全开并停顿\n2. [抓起] 汤勺\n3. [放] 汤勺放到台面指定区域\n4. [关] 推回抽屉确认闭合\n🛑 【防废片红线】 拉抽屉时身体勿遮挡第三视角机位",
+        "passed": true,
+        "safetyTier": "perception"
+      }
+    ],
+    "meta": { "path": "template-first", "generatedCount": 1, "passedCount": 1 }
+  },
+  "t001c": {
+    "candidates": [
+      {
+        "card": {
+          "title": "冲咖啡·抗反光与杂乱版",
+          "variantHint": "抗反光与杂乱版",
+          "purpose": "测验 AI 在强反光和乱七八糟背景下的认物能力。",
+          "context": "你的桌面乱糟糟的且有积水，杯子还倒扣着，请在这种乱局中给自己冲杯咖啡。",
+          "preparation": {
+            "environment": {
+              "title": "第 1 步：布置光影与环境",
+              "items": [
+                { "text": "保持正常灯光。" },
+                { "text": "在茶几桌面上故意撒一滩水，让它产生反光。", "critical": true },
+                { "text": "在操作区周围，故意丢几本花花绿绿的杂志和零食袋（制造视觉杂乱）。", "critical": true }
+              ]
+            },
+            "setup": {
+              "title": "第 2 步：摆放道具",
+              "items": [
+                "把马克杯倒扣在积水的桌子中间。",
+                "右边放热水壶，左边放咖啡条。"
+              ]
+            }
+          },
+          "execution": {
+            "title": "第 3 步：动作执行",
+            "actions": [
+              { "order": 1, "text": "伸出双手，把倒扣的杯子 [翻转] 过来放正（注意避开积水打滑）。", "primitives": ["翻转"] },
+              { "order": 2, "text": "[抓起] 咖啡条撕开，把粉末 [倒] 进杯子，并 [放下] 包装袋。", "primitives": ["抓起", "倒", "放下"] },
+              { "order": 3, "text": "[抓起] 旁边热水壶，向杯中 [倒水]。", "primitives": ["抓起", "倒水"] }
+            ]
+          },
+          "redLines": ["翻转杯子时，手不要挡住杯子在水面上的倒影，算法需要看到倒影数据！"],
+          "difficulty": "complex",
+          "atomicActionIds": ["cat-a", "cat-d"],
+          "propIds": ["p1", "p2", "p3"],
+          "variationTags": ["倒扣", "积水"],
+          "perceptionTags": ["积水反光", "背景杂乱"]
+        },
+        "renderedCard": "🚩 任务：冲咖啡·抗反光与杂乱版\n🎯 目的：测验 AI 在强反光和乱七八糟背景下的认物能力。\n🎬 【导读】 你的桌面乱糟糟的且有积水，杯子还倒扣着，请在这种乱局中给自己冲杯咖啡。\n--- 准备工作（录制前完成） ---\n💡 【第 1 步：布置光影与环境】\n- 保持正常灯光。\n- ⚠️ 关键：在茶几桌面上故意撒一滩水，让它产生反光。\n- ⚠️ 关键：在操作区周围，故意丢几本花花绿绿的杂志和零食袋（制造视觉杂乱）。\n📦 【第 2 步：摆放道具】\n- 把马克杯倒扣在积水的桌子中间。\n- 右边放热水壶，左边放咖啡条。\n--- 开始录制（按下录制键） ---\n🛠️ 【第 3 步：动作执行】\n1. 伸出双手，把倒扣的杯子 [翻转] 过来放正（注意避开积水打滑）。\n2. [抓起] 咖啡条撕开，把粉末 [倒] 进杯子，并 [放下] 包装袋。\n3. [抓起] 旁边热水壶，向杯中 [倒水]。\n🛑 【防废片红线】 翻转杯子时，手不要挡住杯子在水面上的倒影，算法需要看到倒影数据！",
+        "passed": true,
+        "safetyTier": "perception"
+      }
+    ],
+    "meta": { "path": "llm-free", "generatedCount": 1, "passedCount": 1 }
+  },
+  "manipulation-reject": {
+    "candidates": [
+      {
+        "card": {
+          "title": "卖场拣选·双手协同版",
+          "purpose": "覆盖搬运分拣与双手协同取放轨迹。",
+          "context": "沿拣选动线完成一单拣选，动作连贯。",
+          "preparation": {
+            "environment": { "title": "布置光影与环境", "items": [{ "text": "卖场顶灯正常照明，通道保持通畅" }] },
+            "setup": { "title": "摆放道具", "items": ["推车停在货架端头；目标商品在第二层货架"] }
+          },
+          "execution": {
+            "title": "动作执行",
+            "actions": [
+              { "order": 1, "text": "[推] 推车靠近货架定位", "primitives": ["推"] },
+              { "order": 2, "text": "[抓起] 目标商品放入推车", "primitives": ["抓起"] },
+              { "order": 3, "text": "[放] 确认商品稳定不倒", "primitives": ["放"] }
+            ]
+          },
+          "redLines": ["拣选时勿遮挡胸前机位"],
+          "difficulty": "simple",
+          "atomicActionIds": ["cat-g"],
+          "propIds": ["p30"],
+          "variationTags": ["双手协同"],
+          "perceptionTags": []
+        },
+        "renderedCard": "🚩 任务：卖场拣选·双手协同版\n🎯 目的：覆盖搬运分拣与双手协同取放轨迹。\n🎬 【导读】 沿拣选动线完成一单拣选，动作连贯。\n--- 准备工作（录制前完成） ---\n💡 【布置光影与环境】\n- 卖场顶灯正常照明，通道保持通畅\n📦 【摆放道具】\n- 推车停在货架端头；目标商品在第二层货架\n--- 开始录制（按下录制键） ---\n🛠️ 【动作执行】\n1. [推] 推车靠近货架定位\n2. [抓起] 目标商品放入推车\n3. [放] 确认商品稳定不倒\n🛑 【防废片红线】 拣选时勿遮挡胸前机位",
+        "passed": true,
+        "safetyTier": "manipulation"
+      },
+      {
+        "card": {
+          "title": "卖场拣选·错误液体版",
+          "purpose": "（无效候选）",
+          "context": "拣选后向杯中倒水",
+          "preparation": {
+            "environment": { "title": "布置光影与环境", "items": [] },
+            "setup": { "title": "摆放道具", "items": [] }
+          },
+          "execution": {
+            "title": "动作执行",
+            "actions": [{ "order": 1, "text": "[倒] 向杯中倒水", "primitives": ["倒"] }]
+          },
+          "redLines": [],
+          "difficulty": "simple",
+          "atomicActionIds": ["cat-g"],
+          "propIds": ["p30"],
+          "variationTags": [],
+          "perceptionTags": []
+        },
+        "renderedCard": "含倒水描写",
+        "passed": false,
+        "rejectReason": "manipulation 场景禁止液体操作",
+        "safetyTier": "manipulation"
+      }
+    ],
+    "meta": { "path": "llm-free", "generatedCount": 2, "passedCount": 1 }
+  }
+}

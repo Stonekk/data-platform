@@ -1,4 +1,4 @@
-import { ATOMIC_ACTION_CATEGORIES } from '@/data/atomicActions'
+import { categoryById } from '@/data/atomicActions'
 import { templatesForSceneType, templateById } from '@/data/scriptTemplateStore'
 import {
   mockProps,
@@ -8,6 +8,10 @@ import {
   type ScriptTemplate,
   type TaskScript,
 } from '@/data/mock'
+import {
+  estimateCardPreparationMinutes,
+  formatEstimatedMinutes,
+} from '@/lib/scriptGenerator/estimateDuration'
 import { checkPropsApproval } from '@/lib/propApproval'
 
 export const SCRIPT_CANDIDATE_COUNT = 3
@@ -42,8 +46,8 @@ export function propLabels(propIds: string[], props: Prop[] = mockProps): string
 export function atomicActionLabels(ids: string[]): string {
   return ids
     .map((id) => {
-      const cat = ATOMIC_ACTION_CATEGORIES.find((c) => c.id === id)
-      return cat ? `${cat.code}.${cat.name}` : id
+      const cat = categoryById(id)
+      return cat ? cat.name : id
     })
     .join('、')
 }
@@ -236,5 +240,12 @@ export function scriptEstimatedMinutes(script: TaskScript): number {
 export function scriptSummary(script: TaskScript): string {
   const stepCount = script.steps.length
   const minutes = scriptEstimatedMinutes(script)
-  return `${stepCount} 步 · 约 ${minutes} 分钟`
+  const recording = `录制 ${stepCount} 步 · 约 ${formatEstimatedMinutes(minutes)} 分钟`
+  if (script.card) {
+    const prep = estimateCardPreparationMinutes(script.card)
+    if (prep > 0) {
+      return `${recording}（准备约 ${formatEstimatedMinutes(prep)} 分钟）`
+    }
+  }
+  return recording
 }

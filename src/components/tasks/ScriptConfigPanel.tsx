@@ -8,25 +8,35 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  Loader2,
   PenLine,
   Search,
   Sparkles,
   X,
 } from 'lucide-react'
 
-import { ATOMIC_ACTION_CATEGORIES } from '@/data/atomicActions'
+import {
+  categoriesForScene,
+  defaultCategoryIdsForScene,
+} from '@/data/atomicActions'
 import { mockTaskScripts, type Prop, type ScriptDifficulty, type TaskScript } from '@/data/mock'
 import { sceneById, usePlatformScenes } from '@/data/sceneStore'
 import { templateById, usePlatformScriptTemplates } from '@/data/scriptTemplateStore'
 import { checkPropsApproval, requestPropUsage } from '@/lib/propApproval'
 import {
+  draftFromCandidate,
+  generateScripts,
+  getScriptGeneratorMode,
+  scriptGeneratorModeLabel,
+  type ScriptCandidate,
+} from '@/lib/scriptGenerator'
+import { estimateStepDurationsFromOperations } from '@/lib/scriptGenerator/estimateDuration'
+import {
   buildManualScriptDraft,
   canGenerateScript,
   confirmScript,
-  generateScriptCandidates,
   propsForScene,
   resolveDefaultTemplateId,
-  SCRIPT_CANDIDATE_COUNT,
   scriptSummary,
 } from '@/lib/scriptWorkflow'
 import { cn } from '@/lib/utils'
@@ -52,6 +62,12 @@ type ScriptConfigPanelProps = {
 
 const PROP_COLLAPSE_THRESHOLD = 6
 
+const DIFFICULTY_LABEL: Record<ScriptDifficulty, string> = {
+  simple: '简单',
+  complex: '复杂',
+  correction: '纠错',
+}
+
 export function ScriptConfigPanel({
   taskId,
   taskType,
@@ -73,16 +89,26 @@ export function ScriptConfigPanel({
 
   const [writeMode, setWriteMode] = useState<'ai' | 'manual'>('ai')
   const [selectedPropIds, setSelectedPropIds] = useState<string[]>([])
-  const [selectedAtomicIds, setSelectedAtomicIds] = useState<string[]>(['cat-a', 'cat-b'])
+  const [selectedAtomicIds, setSelectedAtomicIds] = useState<string[]>([])
   const [difficulty, setDifficulty] = useState<ScriptDifficulty>('complex')
   const [templateId, setTemplateId] = useState<string>('')
   const [propSearch, setPropSearch] = useState('')
   const [showMoreProps, setShowMoreProps] = useState(false)
-  const [candidates, setCandidates] = useState<TaskScript[]>([])
+  const [draftScripts, setDraftScripts] = useState<TaskScript[]>([])
+  const [aiCandidates, setAiCandidates] = useState<ScriptCandidate[]>([])
   const [selectedCandidateIdx, setSelectedCandidateIdx] = useState(0)
+  const [generating, setGenerating] = useState(false)
+  const [lastMeta, setLastMeta] = useState<{
+    generatedCount: number
+    passedCount: number
+    filteredCount: number
+    durationMs: number
+  } | null>(null)
   const [manualInstruction, setManualInstruction] = useState('')
   const [manualStepsText, setManualStepsText] = useState('')
   const [message, setMessage] = useState<string | null>(null)
+
+  const generatorMode = getScriptGeneratorMode()
 
   const boundScript = useMemo(
     () => scripts.find((s) => s.taskId === (boundScriptId || taskId)),
@@ -102,6 +128,11 @@ export function ScriptConfigPanel({
     [sceneProps, recommendedPropIds],
   )
 
+  const sceneActionCategories = useMemo(
+    () => categoriesForScene(sceneId),
+    [sceneId],
+  )
+
   useEffect(() => {
     if (sceneId === '') return
     const defaults =
@@ -109,8 +140,11 @@ export function ScriptConfigPanel({
         ? recommendedPropIds.filter((id) => sceneProps.some((p) => p.id === id))
         : sceneProps.slice(0, 2).map((p) => p.id)
     setSelectedPropIds(defaults)
+    setSelectedAtomicIds(sceneId ? defaultCategoryIdsForScene(sceneId) : [])
     setPropSearch('')
-    setCandidates([])
+    setDraftScripts([])
+    setAiCandidates([])
+    setLastMeta(null)
     setSelectedCandidateIdx(0)
     setManualInstruction('')
     setManualStepsText('')
@@ -205,18 +239,76 @@ export function ScriptConfigPanel({
     return true
   }
 
-  function handleGenerate(): void {
+  async function handleGenerate(): Promise<void> {
     if (!validateBeforeDraft()) return
-    const nextCandidates = generateScriptCandidates(
-      buildInput(),
-      props,
-      SCRIPT_CANDIDATE_COUNT,
-      templates,
-    )
-    setCandidates(nextCandidates)
-    setSelectedCandidateIdx(0)
-    setMessage(`已生成 ${SCRIPT_CANDIDATE_COUNT} 条候选台本。`)
-    onConfigureComplete()
+
+    const input = buildInput()
+    setGenerating(true)
+    setMessage(null)
+    setDraftScripts([])
+    setAiCandidates([])
+    setLastMeta(null)
+
+    try {
+      const genContext = {
+          input,
+          props,
+          scene: scene
+            ? {
+                name: scene.name,
+                sceneSubtype: scene.sceneSubtype,
+                description: scene.description,
+                safetyTier: scene.safetyTier,
+              }
+            : undefined,
+        }
+      const result = await generateScripts(genContext, generatorMode)
+      const passed = result.candidates.filter((c) => c.passed)
+      const passedDrafts = passed.map((c) => draftFromCandidate(input, c, props, genContext))
+
+      setAiCandidates(result.candidates)
+      setDraftScripts(passedDrafts)
+      setSelectedCandidateIdx(0)
+      setLastMeta({
+        generatedCount: result.meta.generatedCount,
+        passedCount: result.meta.passedCount,
+        filteredCount: result.meta.filteredCount,
+        durationMs: result.meta.durationMs,
+      })
+
+      if (generatorMode === 'llm') {
+        setMessage(
+          passedDrafts.some((d) => d.renderedCard)
+            ? `DeepSeek：生成 ${result.meta.generatedCount} 条，通过 ${result.meta.passedCount} 条（${result.meta.durationMs}ms）。`
+            : `DeepSeek 未返回合格台本，请检查 API Key 或重试。`,
+        )
+      } else if (generatorMode === 'mock-llm') {
+        const usedTemplate = passedDrafts.some((d) => d.renderedCard)
+        setMessage(
+          usedTemplate
+            ? `已按台本模板生成四段式任务卡片（${result.meta.durationMs}ms）。`
+            : `Mock LLM：生成 ${result.meta.generatedCount} 条候选，筛除 ${result.meta.filteredCount} 条不合理任务，保留 ${result.meta.passedCount} 条（${result.meta.durationMs}ms）。无四槽模板时仍为旧版 mock 文案，接入 LLM 后将输出 Skill 卡片格式。`,
+        )
+      } else if (passedDrafts.length > 0) {
+        setMessage(`已生成 ${passedDrafts.length} 条候选台本。`)
+      } else {
+        setMessage('未筛出合格候选，已保留最优草案供调整。')
+        setDraftScripts([result.draft])
+      }
+
+      onConfigureComplete()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '台本生成失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  function selectAiCandidate(candidate: ScriptCandidate): void {
+    if (!candidate.passed) return
+    const passed = aiCandidates.filter((c) => c.passed)
+    const idx = passed.findIndex((c) => c.id === candidate.id)
+    if (idx >= 0) setSelectedCandidateIdx(idx)
   }
 
   function handleSaveManual(): void {
@@ -233,23 +325,29 @@ export function ScriptConfigPanel({
       setMessage('请至少填写一个执行步骤（每行一步）。')
       return
     }
+    const durations = estimateStepDurationsFromOperations(
+      stepLines,
+      buildInput().difficulty,
+    )
     const draft = buildManualScriptDraft({
       ...buildInput(),
       instruction: manualInstruction.trim(),
       steps: stepLines.map((operation, idx) => ({
         order: idx + 1,
         operation,
-        durationMinutes: 10,
+        durationMinutes: durations[idx] ?? 1,
       })),
     })
-    setCandidates([draft])
+    setDraftScripts([draft])
+    setAiCandidates([])
+    setLastMeta(null)
     setSelectedCandidateIdx(0)
     setMessage('人工台本已保存，请确认绑定。')
     onConfigureComplete()
   }
 
   function handleConfirm(): void {
-    const picked = candidates[selectedCandidateIdx] ?? boundScript
+    const picked = draftScripts[selectedCandidateIdx] ?? boundScript
     if (!picked) {
       setMessage('请先在步骤 ② 生成或撰写台本。')
       return
@@ -258,7 +356,9 @@ export function ScriptConfigPanel({
     const without = scripts.filter((s) => s.taskId !== taskId)
     onScriptsChange([confirmed, ...without])
     onBindScript(taskId)
-    setCandidates([])
+    setDraftScripts([])
+    setAiCandidates([])
+    setLastMeta(null)
     setMessage('台本已确认绑定，任务可进入调度。')
   }
 
@@ -271,7 +371,8 @@ export function ScriptConfigPanel({
   }
 
   if (wizardStep === 'confirm') {
-    const preview = candidates[selectedCandidateIdx] ?? boundScript
+    const preview = draftScripts[selectedCandidateIdx] ?? boundScript
+    const passedAi = aiCandidates.filter((c) => c.passed)
     return (
       <div className="space-y-3 rounded-xl border border-border bg-slate-50/80 p-4">
         <div className="flex items-center justify-between gap-2">
@@ -283,24 +384,72 @@ export function ScriptConfigPanel({
           )}
         </div>
 
-        {candidates.length > 0 && boundScript?.status !== 'confirmed' ? (
+        {draftScripts.length > 0 && boundScript?.status !== 'confirmed' ? (
           <div className="space-y-2">
-            <p className="text-xs text-text-secondary">选择一条台本方案后确认绑定：</p>
-            {candidates.map((candidate, idx) => (
-              <button
-                key={`${candidate.taskId}-cand-${idx}`}
-                type="button"
-                onClick={() => setSelectedCandidateIdx(idx)}
-                className={cn(
-                  'w-full rounded-lg border text-left transition-colors',
-                  selectedCandidateIdx === idx
-                    ? 'border-primary ring-2 ring-primary/20'
-                    : 'border-border hover:border-primary/40',
-                )}
-              >
-                <ScriptContentCard script={candidate} props={props} summaryOnly />
-              </button>
-            ))}
+            <p className="text-xs text-text-secondary">
+              选择一条台本方案后确认绑定
+              {lastMeta && (
+                <span className="ml-1 text-text-secondary/80">
+                  （{lastMeta.passedCount}/{lastMeta.generatedCount} 通过筛选）
+                </span>
+              )}
+              ：
+            </p>
+            {aiCandidates.length > 0
+              ? aiCandidates.map((candidate) => {
+                  const passedIdx = passedAi.findIndex((c) => c.id === candidate.id)
+                  const isSelected = candidate.passed && passedIdx === selectedCandidateIdx
+                  const draft =
+                    candidate.passed && passedIdx >= 0
+                      ? draftScripts[passedIdx]
+                      : undefined
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      disabled={!candidate.passed}
+                      onClick={() => selectAiCandidate(candidate)}
+                      className={cn(
+                        'w-full rounded-lg border text-left transition-colors',
+                        !candidate.passed &&
+                          'cursor-not-allowed border-rose-100 bg-rose-50/40 opacity-80',
+                        isSelected && 'border-primary ring-2 ring-primary/20',
+                        candidate.passed &&
+                          !isSelected &&
+                          'border-border hover:border-primary/40',
+                      )}
+                    >
+                      {candidate.passed && draft ? (
+                        <ScriptContentCard script={draft} props={props} summaryOnly />
+                      ) : (
+                        <div className="px-3 py-2 text-[11px]">
+                          <p className="font-medium text-rose-800">
+                            已筛除 · {DIFFICULTY_LABEL[candidate.difficulty]}
+                          </p>
+                          <p className="mt-1 text-rose-700">{candidate.rejectReason}</p>
+                          <p className="mt-1 line-clamp-2 text-text-secondary">
+                            {candidate.instruction}
+                          </p>
+                        </div>
+                      )}
+                    </button>
+                  )
+                })
+              : draftScripts.map((candidate, idx) => (
+                  <button
+                    key={`${candidate.taskId}-cand-${idx}`}
+                    type="button"
+                    onClick={() => setSelectedCandidateIdx(idx)}
+                    className={cn(
+                      'w-full rounded-lg border text-left transition-colors',
+                      selectedCandidateIdx === idx
+                        ? 'border-primary ring-2 ring-primary/20'
+                        : 'border-border hover:border-primary/40',
+                    )}
+                  >
+                    <ScriptContentCard script={candidate} props={props} summaryOnly />
+                  </button>
+                ))}
             {preview && (
               <div className="rounded-lg border border-border bg-white">
                 <p className="border-b border-border px-3 py-2 text-xs font-medium text-text">
@@ -332,7 +481,7 @@ export function ScriptConfigPanel({
             onClick={handleConfirm}
             disabled={
               boundScript?.status === 'confirmed' ||
-              (candidates.length === 0 && boundScript?.status !== 'draft')
+              (draftScripts.length === 0 && boundScript?.status !== 'draft')
             }
             className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
           >
@@ -353,7 +502,14 @@ export function ScriptConfigPanel({
   return (
     <div className="space-y-3 rounded-xl border border-border bg-slate-50/80 p-4">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-text">② 台本配置</h4>
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-semibold text-text">② 台本配置</h4>
+          {writeMode === 'ai' && (
+            <span className="rounded-md bg-slate-200/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+              {scriptGeneratorModeLabel(generatorMode)}
+            </span>
+          )}
+        </div>
         {scene && (
           <span className="text-[11px] text-text-secondary">{scene.name}</span>
         )}
@@ -545,7 +701,10 @@ export function ScriptConfigPanel({
 
           <div>
             <p className="mb-1 text-xs font-medium text-text">
-              原子动作
+              动作大类
+              <span className="ml-1 font-normal text-text-secondary">
+                （{scene?.name ?? '未选场景'} · {sceneActionCategories.length} 项）
+              </span>
               <Link
                 to="/resources/atomic-actions"
                 className="ml-1 inline-flex items-center gap-0.5 font-normal text-primary hover:underline"
@@ -554,24 +713,32 @@ export function ScriptConfigPanel({
                 <ExternalLink className="size-3" />
               </Link>
             </p>
-            <div className="flex flex-wrap gap-1.5">
-              {ATOMIC_ACTION_CATEGORIES.map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => toggleAtomic(cat.id)}
-                  className={cn(
-                    'rounded-md border px-2 py-0.5 text-[11px]',
-                    selectedAtomicIds.includes(cat.id)
-                      ? 'border-primary/40 bg-primary/10 text-primary'
-                      : 'border-border bg-white text-text-secondary hover:bg-slate-50',
-                    cat.highlight && 'ring-1 ring-amber-200',
-                  )}
-                >
-                  {cat.code}.{cat.name}
-                </button>
-              ))}
-            </div>
+            {sceneId === '' ? (
+              <p className="text-[11px] text-text-secondary">请先为任务指派场景库。</p>
+            ) : sceneActionCategories.length === 0 ? (
+              <p className="text-[11px] text-text-secondary">该场景暂无关联动作大类。</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {sceneActionCategories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    title={cat.primitives.join('、')}
+                    onClick={() => toggleAtomic(cat.id)}
+                    className={cn(
+                      'rounded-md border px-2 py-0.5 text-left text-[11px]',
+                      selectedAtomicIds.includes(cat.id)
+                        ? 'border-primary/40 bg-primary/10 text-primary'
+                        : 'border-border bg-white text-text-secondary hover:bg-slate-50',
+                      cat.highlight && 'ring-1 ring-amber-200',
+                    )}
+                  >
+                    <span className="font-medium">{cat.name}</span>
+                    <span className="ml-1 text-[10px] opacity-70">{cat.primitives.length} 原语</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <label className="block text-xs text-text-secondary">
@@ -589,12 +756,16 @@ export function ScriptConfigPanel({
 
           <button
             type="button"
-            onClick={handleGenerate}
-            disabled={!approvalCheck.ok && selectedPropIds.length > 0}
+            onClick={() => void handleGenerate()}
+            disabled={generating || (!approvalCheck.ok && selectedPropIds.length > 0)}
             className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-text hover:bg-slate-50 disabled:opacity-50"
           >
-            <Sparkles className="size-3.5" />
-            生成 {SCRIPT_CANDIDATE_COUNT} 条候选台本
+            {generating ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            {generating ? '生成与筛选中…' : '组合生成台本'}
           </button>
         </>
       )}
@@ -633,13 +804,17 @@ export function ScriptConfigPanel({
         </>
       )}
 
-      {candidates.length > 0 && (
+      {draftScripts.length > 0 && (
         <p className="text-[11px] text-emerald-800">
-          已就绪 {candidates.length} 条方案，可进入步骤 ③ 确认绑定。
+          已就绪 {draftScripts.length} 条合格方案
+          {lastMeta && lastMeta.filteredCount > 0
+            ? `（已筛除 ${lastMeta.filteredCount} 条）`
+            : ''}
+          ，可进入步骤 ③ 确认绑定。
         </p>
       )}
 
-      {candidates.length > 0 && (
+      {draftScripts.length > 0 && (
         <button
           type="button"
           onClick={onConfigureComplete}

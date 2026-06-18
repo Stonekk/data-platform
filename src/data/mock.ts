@@ -2,6 +2,9 @@
  * 具身智能数据平台 — 原型演示用 Mock 数据
  */
 
+import { coldStartProps } from '@/data/seed/coldStartProps'
+import { coldStartScenes } from '@/data/seed/coldStartScenes'
+
 // ---------------------------------------------------------------------------
 // 基础与通用类型
 // ---------------------------------------------------------------------------
@@ -220,6 +223,26 @@ export type TaskScriptStep = {
 export type ScriptStatus = 'draft' | 'confirmed';
 export type ScriptDifficulty = 'simple' | 'complex' | 'correction';
 
+export type SceneSafetyTier = 'perception' | 'manipulation';
+
+export type StaticPerceptionProfile = {
+  lighting: {
+    intensity: 'overexposed' | 'normal' | 'dim';
+    colorTemp: 'cool_white' | 'warm_yellow';
+  };
+  background: {
+    clutter: 'minimal' | 'moderate' | 'heavy';
+    reflectivity: 'matte' | 'glass' | 'water_pool';
+  };
+};
+
+export type ScriptTemplateSkeleton = {
+  context: string;
+  environment: string;
+  setup: string;
+  sequence: string[];
+};
+
 export type TaskScript = {
   taskId: string;
   title: string;
@@ -236,6 +259,10 @@ export type TaskScript = {
   difficulty: ScriptDifficulty;
   /** 自然语言任务指令 */
   instruction: string;
+  /** 结构化任务卡片（台本生成 v2） */
+  card?: import('@/lib/scriptGenerator/taskScriptCard').TaskScriptCard;
+  /** 采集端展示用卡片文本 */
+  renderedCard?: string;
   confirmedAt?: string;
   confirmedBy?: string;
 };
@@ -352,6 +379,8 @@ export type Scene = {
   recommendedPropIds: string[];
   /** 默认台本模板 */
   defaultTemplateId?: string;
+  /** 场景安全等级；未设时由 resolveSafetyTier 按名称推断 */
+  safetyTier?: SceneSafetyTier;
 };
 
 export type ScriptTemplateStatus = 'active' | 'inactive';
@@ -362,6 +391,12 @@ export type ScriptTemplate = {
   /** 适用场景类型（如家庭服务），用于推荐匹配 */
   applicableSceneTypes: string[];
   difficulty: ScriptDifficulty;
+  /** 母任务展示名 */
+  motherTaskLabel?: string;
+  /** 四槽骨架（模板优先路径） */
+  skeleton?: ScriptTemplateSkeleton;
+  allowedVariationAxes?: Array<'object' | 'constraint' | 'perception' | 'action'>;
+  defaultPerceptionProfile?: StaticPerceptionProfile;
   /** 台本说明骨架，支持 {scene} {props} {actions} {taskType} 占位符 */
   instructionSkeleton: string;
   /** 步骤槽位 */
@@ -534,7 +569,7 @@ export const mockRequirements: Requirement[] = [
     title: '厨房场景双臂遥操作抓取',
     status: 'executing',
     dataType: 'teleoperation',
-    scene: '家庭厨房标准间',
+    scene: '厨房',
     device: '双臂遥操作台 A1',
     dataVolume: '约 2.4 TB',
     deliveryDate: '2025-04-15',
@@ -909,7 +944,7 @@ export const mockRequirements: Requirement[] = [
     ],
     linkedTaskIds: [],
     progress: 0,
-    blockReason: '场景 scene-008 尚未审批通过，无法开展采集',
+    blockReason: '场景「洗衣区」尚未审批通过，无法开展采集',
   },
   {
     id: 'req-009',
@@ -1146,7 +1181,7 @@ export const mockRequirements: Requirement[] = [
     title: '家庭餐桌收拾动捕（多餐具碰撞）',
     status: 'approved',
     dataType: 'motion_capture',
-    scene: '家庭厨房标准间',
+    scene: '厨房',
     device: '动捕套装 M3',
     dataVolume: '约 1.2 TB',
     deliveryDate: '2025-05-18',
@@ -1239,7 +1274,7 @@ export const mockTasks: Task[] = [
     id: 'task-001',
     device: '双臂遥操作台 A1',
     personnel: '陈思远',
-    scene: '家庭厨房标准间',
+    scene: '厨房',
     status: 'in_progress',
     startTime: '2025-03-26T09:00:00+08:00',
     endTime: '2025-03-26T12:00:00+08:00',
@@ -1247,7 +1282,7 @@ export const mockTasks: Task[] = [
     requirementId: 'req-001',
     personnelId: 'per-001',
     deviceId: 'dev-001',
-    sceneId: 'scene-001',
+    sceneId: 'scene-chufang',
     scriptId: 'task-001',
     priority: 'high',
   },
@@ -1255,7 +1290,7 @@ export const mockTasks: Task[] = [
     id: 'task-002',
     device: '动捕套装 M3',
     personnel: '林婉清',
-    scene: '商超仿真卖场',
+    scene: '客厅',
     status: 'completed',
     startTime: '2025-03-25T14:00:00+08:00',
     endTime: '2025-03-25T18:30:00+08:00',
@@ -1263,14 +1298,14 @@ export const mockTasks: Task[] = [
     requirementId: 'req-003',
     personnelId: 'per-002',
     deviceId: 'dev-004',
-    sceneId: 'scene-003',
+    sceneId: 'scene-keting',
     priority: 'high',
   },
   {
     id: 'task-003',
     device: '人形机器人 H2',
     personnel: '赵子墨',
-    scene: '室内外过渡区',
+    scene: '玄关',
     status: 'scheduled',
     startTime: '2025-03-26T13:30:00+08:00',
     endTime: '2025-03-26T17:00:00+08:00',
@@ -1278,12 +1313,12 @@ export const mockTasks: Task[] = [
     requirementId: 'req-004',
     personnelId: 'per-003',
     deviceId: 'dev-006',
-    sceneId: 'scene-004',
+    sceneId: 'scene-xuanguan',
     scriptId: 'task-003',
     scriptException: {
       reportedAt: '2025-03-26T13:00:00+08:00',
       reporter: '赵子墨',
-      reason: '现场门槛道具高度与台本描述不符',
+      reason: '现场门垫摆放位置与台本描述不符',
       status: 'open',
     },
     priority: 'high',
@@ -1292,14 +1327,14 @@ export const mockTasks: Task[] = [
     id: 'task-004',
     device: '可穿戴惯性套装 W1',
     personnel: '周若彤',
-    scene: '装配工位线体',
+    scene: '书房',
     status: 'to_schedule',
     startTime: '2025-03-27T08:30:00+08:00',
     endTime: '2025-03-27T11:30:00+08:00',
     type: '人体数据采集',
     personnelId: 'per-004',
     deviceId: 'dev-007',
-    sceneId: 'scene-002',
+    sceneId: 'scene-shufang',
     priority: 'medium',
     blockReason: '孤儿任务：未关联明确需求，需补录',
   },
@@ -1307,7 +1342,7 @@ export const mockTasks: Task[] = [
     id: 'task-005',
     device: '移动底盘 C1',
     personnel: '韩博文',
-    scene: '仓储分拣区',
+    scene: '储物间',
     status: 'to_schedule',
     startTime: '2025-03-25T10:00:00+08:00',
     endTime: '2025-03-25T16:00:00+08:00',
@@ -1315,7 +1350,7 @@ export const mockTasks: Task[] = [
     requirementId: 'req-006',
     personnelId: 'per-005',
     deviceId: 'dev-008',
-    sceneId: 'scene-006',
+    sceneId: 'scene-chuwujian',
     priority: 'medium',
     blockReason: 'AGV 定位跳变导致会话中止，待修复后重排',
   },
@@ -1323,7 +1358,7 @@ export const mockTasks: Task[] = [
     id: 'task-006',
     device: '双臂遥操作台 A2',
     personnel: '沈佳怡',
-    scene: '防静电工作台',
+    scene: '书房',
     status: 'completed',
     startTime: '2025-03-24T09:00:00+08:00',
     endTime: '2025-03-24T15:00:00+08:00',
@@ -1331,14 +1366,14 @@ export const mockTasks: Task[] = [
     requirementId: 'req-007',
     personnelId: 'per-006',
     deviceId: 'dev-002',
-    sceneId: 'scene-007',
+    sceneId: 'scene-shufang',
     priority: 'medium',
   },
   {
     id: 'task-007',
     device: '动捕套装 M3',
     personnel: '林婉清',
-    scene: '体育馆多功能场地',
+    scene: '阳台',
     status: 'in_progress',
     startTime: '2025-03-26T08:00:00+08:00',
     endTime: '2025-03-26T11:00:00+08:00',
@@ -1346,7 +1381,7 @@ export const mockTasks: Task[] = [
     requirementId: 'req-009',
     personnelId: 'per-002',
     deviceId: 'dev-004',
-    sceneId: 'scene-009',
+    sceneId: 'scene-yangtai',
     scriptId: 'task-007',
     priority: 'medium',
     blockReason: 'qa-004 打回：高速模糊自动关键点失败，待补拍方案',
@@ -1355,22 +1390,22 @@ export const mockTasks: Task[] = [
     id: 'task-008',
     device: '柔性传感衣 S2',
     personnel: '何雨桐',
-    scene: '康复训练室',
+    scene: '儿童房',
     status: 'closed',
     startTime: '2025-03-26T10:00:00+08:00',
     endTime: '2025-03-26T12:00:00+08:00',
     type: '人体数据采集',
     personnelId: 'per-007',
     deviceId: 'dev-005',
-    sceneId: 'scene-005',
+    sceneId: 'scene-ertongfang',
     priority: 'low',
-    blockReason: '场景 scene-005 维护中，任务取消',
+    blockReason: '场景「儿童房」维护中，任务取消',
   },
   {
     id: 'task-009',
     device: '移动机械臂 R1',
     personnel: '邓宇航',
-    scene: '温室大棚示范区',
+    scene: '阳台',
     status: 'completed',
     startTime: '2025-03-22T07:00:00+08:00',
     endTime: '2025-03-22T12:00:00+08:00',
@@ -1378,14 +1413,14 @@ export const mockTasks: Task[] = [
     requirementId: 'req-010',
     personnelId: 'per-008',
     deviceId: 'dev-009',
-    sceneId: 'scene-010',
+    sceneId: 'scene-yangtai',
     priority: 'low',
   },
   {
     id: 'task-010',
     device: '深度相机 + W1',
     personnel: '蒋心怡',
-    scene: '写字楼电梯厅',
+    scene: '玄关',
     status: 'scheduled',
     startTime: '2025-03-27T17:00:00+08:00',
     endTime: '2025-03-27T19:30:00+08:00',
@@ -1393,7 +1428,7 @@ export const mockTasks: Task[] = [
     requirementId: 'req-011',
     personnelId: 'per-009',
     deviceId: 'dev-010',
-    sceneId: 'scene-011',
+    sceneId: 'scene-xuanguan',
     scriptId: 'task-010',
     priority: 'medium',
   },
@@ -1401,14 +1436,14 @@ export const mockTasks: Task[] = [
     id: 'task-011',
     device: '动捕套装 M2',
     personnel: '罗嘉诚',
-    scene: '舞蹈排练厅',
+    scene: '儿童房',
     status: 'to_schedule',
     startTime: '2025-03-28T14:00:00+08:00',
     endTime: '2025-03-28T18:00:00+08:00',
     type: '动捕采集',
     personnelId: 'per-010',
     deviceId: 'dev-003',
-    sceneId: 'scene-012',
+    sceneId: 'scene-ertongfang',
     priority: 'low',
     blockReason: '设备 M2 维护中，装置未就绪',
   },
@@ -1416,28 +1451,28 @@ export const mockTasks: Task[] = [
     id: 'task-012',
     device: '多相机阵列 + W1',
     personnel: '许明哲',
-    scene: '交通枢纽大厅',
+    scene: '洗衣区',
     status: 'to_schedule',
     startTime: '2025-04-01T09:00:00+08:00',
     endTime: '2025-04-01T18:00:00+08:00',
     type: '人体数据采集',
     personnelId: 'per-011',
     deviceId: 'dev-007',
-    sceneId: 'scene-008',
+    sceneId: 'scene-xiyiqu',
     priority: 'low',
-    blockReason: '场景 scene-008 尚未开放，需求 req-008 已驳回',
+    blockReason: '场景「洗衣区」尚未审批通过，需求 req-008 已驳回',
   },
 ];
 
 export const mockTaskSchedule: TaskScheduleSlot[] = [
-  { taskId: 'task-001', startTime: '2025-03-26T09:00:00+08:00', endTime: '2025-03-26T12:00:00+08:00', sceneId: 'scene-001', priority: 'high' },
-  { taskId: 'task-003', startTime: '2025-03-26T13:30:00+08:00', endTime: '2025-03-26T17:00:00+08:00', sceneId: 'scene-004', priority: 'high' },
-  { taskId: 'task-007', startTime: '2025-03-26T08:00:00+08:00', endTime: '2025-03-26T11:00:00+08:00', sceneId: 'scene-009', priority: 'medium' },
-  { taskId: 'task-004', startTime: '2025-03-27T08:30:00+08:00', endTime: '2025-03-27T11:30:00+08:00', sceneId: 'scene-002', priority: 'medium' },
-  { taskId: 'task-010', startTime: '2025-03-27T17:00:00+08:00', endTime: '2025-03-27T19:30:00+08:00', sceneId: 'scene-011', priority: 'low' },
-  { taskId: 'task-011', startTime: '2025-03-28T14:00:00+08:00', endTime: '2025-03-28T18:00:00+08:00', sceneId: 'scene-012', priority: 'low' },
-  { taskId: 'task-002', startTime: '2025-03-25T14:00:00+08:00', endTime: '2025-03-25T18:30:00+08:00', sceneId: 'scene-003', priority: 'high' },
-  { taskId: 'task-006', startTime: '2025-03-24T09:00:00+08:00', endTime: '2025-03-24T15:00:00+08:00', sceneId: 'scene-007', priority: 'medium' },
+  { taskId: 'task-001', startTime: '2025-03-26T09:00:00+08:00', endTime: '2025-03-26T12:00:00+08:00', sceneId: 'scene-chufang', priority: 'high' },
+  { taskId: 'task-003', startTime: '2025-03-26T13:30:00+08:00', endTime: '2025-03-26T17:00:00+08:00', sceneId: 'scene-xuanguan', priority: 'high' },
+  { taskId: 'task-007', startTime: '2025-03-26T08:00:00+08:00', endTime: '2025-03-26T11:00:00+08:00', sceneId: 'scene-yangtai', priority: 'medium' },
+  { taskId: 'task-004', startTime: '2025-03-27T08:30:00+08:00', endTime: '2025-03-27T11:30:00+08:00', sceneId: 'scene-shufang', priority: 'medium' },
+  { taskId: 'task-010', startTime: '2025-03-27T17:00:00+08:00', endTime: '2025-03-27T19:30:00+08:00', sceneId: 'scene-xuanguan', priority: 'low' },
+  { taskId: 'task-011', startTime: '2025-03-28T14:00:00+08:00', endTime: '2025-03-28T18:00:00+08:00', sceneId: 'scene-ertongfang', priority: 'low' },
+  { taskId: 'task-002', startTime: '2025-03-25T14:00:00+08:00', endTime: '2025-03-25T18:30:00+08:00', sceneId: 'scene-keting', priority: 'high' },
+  { taskId: 'task-006', startTime: '2025-03-24T09:00:00+08:00', endTime: '2025-03-24T15:00:00+08:00', sceneId: 'scene-shufang', priority: 'medium' },
 ];
 
 export const mockTaskScripts: TaskScript[] = [
@@ -1448,11 +1483,11 @@ export const mockTaskScripts: TaskScript[] = [
     personnelIds: ['per-001'],
     deviceIds: ['dev-001'],
     status: 'confirmed',
-    sceneId: 'scene-001',
-    propIds: ['prop-001', 'prop-002', 'prop-003'],
-    atomicActionIds: ['cat-a', 'cat-b'],
+    sceneId: 'scene-chufang',
+    propIds: ['prop-042', 'prop-195', 'prop-005'],
+    atomicActionIds: ['scene-chufang|餐具收纳', 'scene-chufang|厨房清洁'],
     difficulty: 'complex',
-    instruction: '在家庭厨房标准间，使用抽屉、汤勺与分隔盒，完成遥操作采集相关演示。',
+    instruction: '在厨房场景，使用橱柜门把手、汤勺与保鲜盒，完成遥操作采集相关演示。',
     confirmedAt: '2025-03-25T18:00:00+08:00',
     confirmedBy: '运营-张敏',
     steps: [
@@ -1470,11 +1505,11 @@ export const mockTaskScripts: TaskScript[] = [
     personnelIds: ['per-003'],
     deviceIds: ['dev-006'],
     status: 'confirmed',
-    sceneId: 'scene-004',
-    propIds: ['prop-010'],
-    atomicActionIds: ['cat-h', 'cat-i'],
+    sceneId: 'scene-xuanguan',
+    propIds: ['prop-142'],
+    atomicActionIds: ['scene-xuanguan|出入门准备', 'scene-xuanguan|安全检查'],
     difficulty: 'complex',
-    instruction: '在室内外过渡区，使用木质门槛道具，完成遥操作采集相关演示。',
+    instruction: '在玄关场景，使用门垫道具，完成遥操作采集相关演示。',
     confirmedAt: '2025-03-25T20:00:00+08:00',
     confirmedBy: '运营-张敏',
     steps: [
@@ -1491,11 +1526,11 @@ export const mockTaskScripts: TaskScript[] = [
     personnelIds: ['per-002'],
     deviceIds: ['dev-004'],
     status: 'draft',
-    sceneId: 'scene-011',
-    propIds: ['prop-020', 'prop-021'],
-    atomicActionIds: ['cat-a', 'cat-g'],
+    sceneId: 'scene-keting',
+    propIds: ['prop-254', 'prop-242'],
+    atomicActionIds: ['scene-keting|物品收纳', 'scene-keting|地面清洁'],
     difficulty: 'simple',
-    instruction: '在体育馆多功能场地，使用球拍与乒乓球，完成动捕采集相关演示。',
+    instruction: '在客厅场景，使用游戏手柄与遥控器，完成动捕采集相关演示。',
     steps: [
       { order: 1, operation: '热身与骨骼绑定检查', durationMinutes: 15 },
       { order: 2, operation: '定点喂球机节奏 80/min', durationMinutes: 30 },
@@ -1509,11 +1544,11 @@ export const mockTaskScripts: TaskScript[] = [
     personnelIds: ['per-009'],
     deviceIds: ['dev-010'],
     status: 'confirmed',
-    sceneId: 'scene-011',
-    propIds: ['prop-020'],
-    atomicActionIds: ['cat-h', 'cat-i'],
+    sceneId: 'scene-xuanguan',
+    propIds: ['prop-144'],
+    atomicActionIds: ['scene-xuanguan|出入门准备', 'scene-xuanguan|安全检查'],
     difficulty: 'simple',
-    instruction: '在写字楼电梯厅，使用引导标识道具，覆盖全身移动与移动-操作耦合，完成人体数据采集演示。',
+    instruction: '在玄关场景，使用门锁旋钮，覆盖出入门准备动作，完成人体数据采集演示。',
     confirmedAt: '2025-03-27T10:00:00+08:00',
     confirmedBy: '运营-张敏',
     steps: [
@@ -1524,17 +1559,7 @@ export const mockTaskScripts: TaskScript[] = [
   },
 ];
 
-export const mockProps: Prop[] = [
-  { id: 'prop-001', name: '厨房抽屉', sceneId: 'scene-001', category: '家具', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-DRW-01', quantity: 2 },
-  { id: 'prop-002', name: '汤勺', sceneId: 'scene-001', category: '餐具', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-UTL-03', quantity: 6 },
-  { id: 'prop-003', name: '分隔盒', sceneId: 'scene-001', category: '收纳', requiresApproval: false, approvalStatus: 'none', assetCode: 'KIT-BOX-02', quantity: 4 },
-  { id: 'prop-010', name: '木质门槛 15cm', sceneId: 'scene-004', category: '结构', requiresApproval: false, approvalStatus: 'none', assetCode: 'TRN-THR-15', quantity: 1 },
-  { id: 'prop-011', name: '可调高度门槛（贵重）', sceneId: 'scene-004', category: '结构', requiresApproval: true, approvalStatus: 'none', assetCode: 'TRN-THR-ADJ', quantity: 1 },
-  { id: 'prop-020', name: '乒乓球拍', sceneId: 'scene-011', category: '运动器材', requiresApproval: false, approvalStatus: 'none', assetCode: 'GYM-PAD-01', quantity: 8 },
-  { id: 'prop-021', name: '乒乓球', sceneId: 'scene-011', category: '消耗品', requiresApproval: false, approvalStatus: 'none', assetCode: 'GYM-BAL-01', quantity: 200 },
-  { id: 'prop-030', name: '商用咖啡机', sceneId: 'scene-003', category: '设备', requiresApproval: true, approvalStatus: 'approved', assetCode: 'CAF-MCH-01', quantity: 1 },
-  { id: 'prop-031', name: '展车模型', sceneId: 'scene-005', category: '贵重展具', requiresApproval: true, approvalStatus: 'pending', assetCode: '4S-CAR-01', quantity: 1 },
-];
+export const mockProps: Prop[] = coldStartProps;
 
 // ---------------------------------------------------------------------------
 // 4. 设备
@@ -1912,10 +1937,34 @@ export const mockScriptTemplates: ScriptTemplate[] = [
   {
     id: 'tpl-001',
     name: '家庭厨房-抽屉取放标准',
+    motherTaskLabel: '厨房抽屉取放',
     applicableSceneTypes: ['家庭服务'],
     difficulty: 'complex',
-    instructionSkeleton: '在{scene}，使用{props}，按模板完成{taskType}；覆盖动作{actions}。',
-    stepSlots: ['标定起始位姿与力控阈值', '拉开抽屉至全开并停顿', '抓取目标道具并归位', '推回抽屉确认闭合', '第三视角巡检与数据封包'],
+    skeleton: {
+      context: '完成一次标准抽屉取放，动作连贯、可复述。',
+      environment: '打开厨房主灯，保持正常冷白光；台面整洁，无额外反光干扰。',
+      setup: '目标道具放在抽屉内指定位置；抽屉初始全关。',
+      sequence: [
+        '标定起始位姿',
+        '拉开抽屉至全开并停顿',
+        '抓取目标道具',
+        '将道具取出并放到台面指定区域',
+        '推回抽屉确认闭合',
+      ],
+    },
+    allowedVariationAxes: ['object', 'constraint', 'action'],
+    defaultPerceptionProfile: {
+      lighting: { intensity: 'normal', colorTemp: 'cool_white' },
+      background: { clutter: 'minimal', reflectivity: 'matte' },
+    },
+    instructionSkeleton: '在{scene}，使用{props}，{context}',
+    stepSlots: [
+      '标定起始位姿',
+      '拉开抽屉至全开并停顿',
+      '抓取目标道具',
+      '将道具取出并放到台面指定区域',
+      '推回抽屉确认闭合',
+    ],
     status: 'active',
   },
   {
@@ -1951,20 +2000,7 @@ export const mockScriptTemplates: ScriptTemplate[] = [
 // 8. 场景库（挂在室级场地）
 // ---------------------------------------------------------------------------
 
-export const mockScenes: Scene[] = [
-  { id: 'scene-001', name: '家庭厨房标准间', venueId: 'venue-room-101', industry: '生活服务', type: '家庭服务', sceneSubtype: '标准成套厨房', status: 'active', location: 'A栋-1楼-101室', description: '标准化橱柜、灶具与常见餐具，支持多机位与力控遥操作。', recommendedPropIds: ['prop-001', 'prop-002', 'prop-003'], defaultTemplateId: 'tpl-001' },
-  { id: 'scene-002', name: '装配工位线体', venueId: 'venue-room-201', industry: '制造与工业', type: '工业制造', sceneSubtype: '线体单工位', status: 'active', location: 'A栋-2楼-201室', description: '螺丝工位、治具与工具车，适合工效与协作数据采集。', recommendedPropIds: [], defaultTemplateId: 'tpl-001' },
-  { id: 'scene-003', name: '商超仿真卖场', venueId: 'venue-room-market', industry: '零售与物流', type: '零售物流', sceneSubtype: '卖场拣选动线', status: 'active', location: '仿真卖场区', description: '货架、推车与收银mock，动捕覆盖率高。', recommendedPropIds: ['prop-030'], defaultTemplateId: 'tpl-002' },
-  { id: 'scene-004', name: '室内外过渡区', venueId: 'venue-room-lab-outdoor', industry: '移动机器人', type: '移动机器人', sceneSubtype: '门槛与坡道组合', status: 'active', location: '户外连廊', description: '多种门槛与坡度组合，天气可控半开放。', recommendedPropIds: ['prop-010'], defaultTemplateId: 'tpl-003' },
-  { id: 'scene-005', name: '康复训练室', venueId: 'venue-room-102', industry: '医疗康复', type: '医疗康复', sceneSubtype: '步态与辅具', status: 'maintenance', location: 'A栋-1楼-102室', description: '平行杠、助行器；本周地胶更换中。', recommendedPropIds: ['prop-031'], defaultTemplateId: undefined },
-  { id: 'scene-006', name: '仓储分拣区', venueId: 'venue-room-market', industry: '零售与物流', type: '物流仓储', sceneSubtype: 'AGV 拣选通道', status: 'active', location: '仿真卖场区-仓储角', description: 'AGV 通道、拣选站与异常口。', recommendedPropIds: ['prop-030'], defaultTemplateId: 'tpl-002' },
-  { id: 'scene-007', name: '防静电工作台', venueId: 'venue-room-201', industry: '制造与工业', type: '电子精密', sceneSubtype: '洁净间工位', status: 'active', location: 'A栋-2楼-201室', description: '离子风机、显微镜工位。', recommendedPropIds: [], defaultTemplateId: 'tpl-001' },
-  { id: 'scene-008', name: '交通枢纽大厅', venueId: 'venue-room-lab-hall', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '大客流通廊', status: 'inactive', location: '枢纽大厅', description: '审批通过后开放采集，当前仅勘景。', recommendedPropIds: [], defaultTemplateId: 'tpl-004' },
-  { id: 'scene-009', name: '体育馆多功能场地', venueId: 'venue-room-101', industry: '文体教育', type: '体育训练', sceneSubtype: '球类半场布置', status: 'active', location: 'A栋-1楼-101室', description: '羽毛球/乒乓球快速切换布置。', recommendedPropIds: ['prop-020', 'prop-021'], defaultTemplateId: 'tpl-001' },
-  { id: 'scene-010', name: '温室大棚示范区', venueId: 'venue-room-lab-outdoor', industry: '农业与环境', type: '农业', sceneSubtype: '高湿温室', status: 'active', location: '户外连廊-南侧', description: '湿度大，设备需每日烘干。', recommendedPropIds: [], defaultTemplateId: undefined },
-  { id: 'scene-011', name: '写字楼电梯厅', venueId: 'venue-room-lab-hall', industry: '出行与公共空间', type: '公共场景', sceneSubtype: '电梯厅进出', status: 'active', location: '枢纽大厅-电梯厅', description: '高峰时段需物业协同。', recommendedPropIds: ['prop-020'], defaultTemplateId: 'tpl-004' },
-  { id: 'scene-012', name: '舞蹈排练厅', venueId: 'venue-room-102', industry: '文体教育', type: '文娱教育', sceneSubtype: '镜面排练厅', status: 'active', location: 'A栋-1楼-102室', description: '镜面墙、把杆与地胶维护良好。', recommendedPropIds: [], defaultTemplateId: undefined },
-];
+export const mockScenes: Scene[] = coldStartScenes;
 
 // ---------------------------------------------------------------------------
 // 7. 采集会话与传输

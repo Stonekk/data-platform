@@ -6,6 +6,13 @@ let platformTemplates: ScriptTemplate[] = mockScriptTemplates.map((t) => ({
   ...t,
   applicableSceneTypes: [...t.applicableSceneTypes],
   stepSlots: [...t.stepSlots],
+  skeleton: t.skeleton
+    ? {
+        ...t.skeleton,
+        sequence: [...t.skeleton.sequence],
+      }
+    : undefined,
+  allowedVariationAxes: t.allowedVariationAxes ? [...t.allowedVariationAxes] : undefined,
 }))
 
 const listeners = new Set<() => void>()
@@ -26,6 +33,13 @@ export function updatePlatformScriptTemplates(
       ...t,
       applicableSceneTypes: [...t.applicableSceneTypes],
       stepSlots: [...t.stepSlots],
+      skeleton: t.skeleton
+        ? {
+            ...t.skeleton,
+            sequence: [...t.skeleton.sequence],
+          }
+        : undefined,
+      allowedVariationAxes: t.allowedVariationAxes ? [...t.allowedVariationAxes] : undefined,
     })),
   )
   emit()
