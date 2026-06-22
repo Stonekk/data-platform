@@ -10,6 +10,7 @@ import {
   type TaskScript,
 } from '@/data/mock'
 import { isScriptSchedulable } from '@/lib/scriptWorkflow'
+import { scriptsForTask, taskScriptIds } from '@/lib/taskScriptAccess'
 
 export type ReadinessState = 'ready' | 'warn' | 'missing'
 
@@ -70,16 +71,28 @@ function checkDevice(task: Task): ReadinessCheck {
 }
 
 function checkScript(task: Task, scripts: TaskScript[]): ReadinessCheck {
-  if (task.scriptId === undefined || task.scriptId === '') {
+  const ids = taskScriptIds(task)
+  if (ids.length === 0) {
     return { state: 'missing', reason: '未绑定台本（"事"要素缺失）' }
   }
-  const s: TaskScript | undefined = scripts.find((x) => x.taskId === task.scriptId)
-  if (s === undefined) return { state: 'missing', reason: `台本 ${task.scriptId} 不存在` }
+  const bound = scriptsForTask(task, scripts)
+  if (bound.length !== ids.length) {
+    const missing = ids.filter((id) => !bound.some((s) => s.taskId === id))
+    return { state: 'missing', reason: `台本缺失：${missing.join(', ')}` }
+  }
   if (task.scriptException?.status === 'open') {
     return { state: 'warn', reason: '台本道具异常待运营现场核实' }
   }
-  if (!isScriptSchedulable(s)) {
-    return { state: 'missing', reason: '台本未确认绑定，不可调度' }
+  const unconfirmed = bound.filter((s) => !isScriptSchedulable(s))
+  if (unconfirmed.length > 0) {
+    const n = unconfirmed.length
+    return {
+      state: 'missing',
+      reason: n === 1 ? '1 个台本未确认' : `${n} 个台本未确认，不可调度`,
+    }
+  }
+  if (ids.length > 1) {
+    return { state: 'ready', reason: `${ids.length} 个台本均已确认` }
   }
   return { state: 'ready' }
 }

@@ -27,6 +27,7 @@ import {
   draftFromCandidate,
   generateScripts,
   getScriptGeneratorMode,
+  rankCandidates,
   scriptGeneratorModeLabel,
   type ScriptCandidate,
 } from '@/lib/scriptGenerator'
@@ -42,6 +43,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { ScriptContentCard } from './ScriptContentCard'
+import { ScriptQcSummaryBar } from './ScriptQcBadge'
 
 export type ScriptWizardStep = 'configure' | 'confirm'
 
@@ -61,12 +63,6 @@ type ScriptConfigPanelProps = {
 }
 
 const PROP_COLLAPSE_THRESHOLD = 6
-
-const DIFFICULTY_LABEL: Record<ScriptDifficulty, string> = {
-  simple: '简单',
-  complex: '复杂',
-  correction: '纠错',
-}
 
 export function ScriptConfigPanel({
   taskId,
@@ -266,7 +262,7 @@ export function ScriptConfigPanel({
       const passed = result.candidates.filter((c) => c.passed)
       const passedDrafts = passed.map((c) => draftFromCandidate(input, c, props, genContext))
 
-      setAiCandidates(result.candidates)
+      setAiCandidates(rankCandidates(result.candidates))
       setDraftScripts(passedDrafts)
       setSelectedCandidateIdx(0)
       setLastMeta({
@@ -373,6 +369,7 @@ export function ScriptConfigPanel({
   if (wizardStep === 'confirm') {
     const preview = draftScripts[selectedCandidateIdx] ?? boundScript
     const passedAi = aiCandidates.filter((c) => c.passed)
+    const failedAiCount = aiCandidates.length - passedAi.length
     return (
       <div className="space-y-3 rounded-xl border border-border bg-slate-50/80 p-4">
         <div className="flex items-center justify-between gap-2">
@@ -395,14 +392,23 @@ export function ScriptConfigPanel({
               )}
               ：
             </p>
+            {aiCandidates.length > 0 && (
+              <ScriptQcSummaryBar
+                passed={passedAi.length}
+                failed={failedAiCount}
+              />
+            )}
             {aiCandidates.length > 0
-              ? aiCandidates.map((candidate) => {
+              ? aiCandidates.map((candidate, displayIdx) => {
                   const passedIdx = passedAi.findIndex((c) => c.id === candidate.id)
                   const isSelected = candidate.passed && passedIdx === selectedCandidateIdx
                   const draft =
                     candidate.passed && passedIdx >= 0
                       ? draftScripts[passedIdx]
                       : undefined
+                  const rankLabel = candidate.passed
+                    ? `推荐 #${passedIdx + 1}`
+                    : `已筛除 #${displayIdx + 1}`
                   return (
                     <button
                       key={candidate.id}
@@ -412,22 +418,34 @@ export function ScriptConfigPanel({
                       className={cn(
                         'w-full rounded-lg border text-left transition-colors',
                         !candidate.passed &&
-                          'cursor-not-allowed border-rose-100 bg-rose-50/40 opacity-80',
+                          'cursor-not-allowed border-rose-300 bg-rose-50/70',
                         isSelected && 'border-primary ring-2 ring-primary/20',
                         candidate.passed &&
                           !isSelected &&
                           'border-border hover:border-primary/40',
                       )}
                     >
+                      <div className="flex flex-wrap items-center gap-2 border-b border-inherit px-3 py-2">
+                        <span className="text-[11px] font-medium text-text-secondary">{rankLabel}</span>
+                        {candidate.passed ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-900 ring-1 ring-inset ring-emerald-200">
+                            {candidate.score} 分
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-900 ring-1 ring-inset ring-rose-300">
+                            未过质检
+                          </span>
+                        )}
+                      </div>
                       {candidate.passed && draft ? (
                         <ScriptContentCard script={draft} props={props} summaryOnly />
                       ) : (
-                        <div className="px-3 py-2 text-[11px]">
-                          <p className="font-medium text-rose-800">
-                            已筛除 · {DIFFICULTY_LABEL[candidate.difficulty]}
+                        <div className="px-3 py-2 text-xs">
+                          <p className="font-semibold text-rose-900">L1 拒因</p>
+                          <p className="mt-1 text-sm leading-relaxed text-rose-800">
+                            {candidate.rejectReason ?? '未满足硬规则质检'}
                           </p>
-                          <p className="mt-1 text-rose-700">{candidate.rejectReason}</p>
-                          <p className="mt-1 line-clamp-2 text-text-secondary">
+                          <p className="mt-2 line-clamp-2 text-text-secondary">
                             {candidate.instruction}
                           </p>
                         </div>

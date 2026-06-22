@@ -16,6 +16,14 @@ export type {
 } from '@/lib/scriptGenerator/types'
 export { draftFromCandidate } from '@/lib/scriptGenerator/templateProvider'
 export { resolveSafetyTier } from '@/lib/scriptGenerator/safetyTier'
+export {
+  compareScriptsByQcScore,
+  isScriptQcPassed,
+  qcStatusLabel,
+  sortScriptsByQcScore,
+  summarizeScriptQc,
+} from '@/lib/scriptGenerator/scriptQc'
+export { pickBestCandidate, rankCandidates } from '@/lib/scriptGenerator/filter'
 export type { SceneSafetyTier } from '@/lib/scriptGenerator/safetyTier'
 export {
   buildCardFromTemplate,

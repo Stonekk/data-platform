@@ -315,7 +315,7 @@ export function Sidebar({
         {nav}
 
         <div className="mt-auto border-t border-slate-200 px-4 py-3 text-[11px] leading-relaxed text-slate-400">
-          具身智能数据平台 · 内部使用
+          具身智能数据平台 · v{__APP_VERSION__}
         </div>
       </aside>
     </>

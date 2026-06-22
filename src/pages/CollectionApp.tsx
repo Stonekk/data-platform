@@ -21,14 +21,23 @@ import { DataTable, type DataTableColumn, ProgressBar, StatusBadge } from '@/com
 import {
   mockCollectionSessions,
   mockIssueReports,
-  mockTaskScripts,
-  mockTasks,
   type CollectionSession,
   type IssueReport,
   type Task,
   type TaskScript,
 } from '@/data/mock'
 import { usePlatformProps } from '@/data/propStore'
+import {
+  setPlatformTasksState,
+  usePlatformTaskScripts,
+  usePlatformTasks,
+} from '@/data/taskStore'
+import {
+  allScriptsSchedulable,
+  scriptsForTask,
+  taskScriptIds,
+  totalTargetCount,
+} from '@/lib/taskScriptAccess'
 import { scriptEstimatedMinutes } from '@/lib/scriptWorkflow'
 import { cn } from '@/lib/utils'
 
@@ -45,7 +54,7 @@ type PhoneTab = 'pending' | 'active'
 type PhoneRoute =
   | { kind: 'tabs' }
   | { kind: 'task'; taskId: string }
-  | { kind: 'collect'; taskId: string }
+  | { kind: 'collect'; taskId: string; scriptId: string }
   | { kind: 'report' }
 
 type PlatformEvent = {
@@ -59,8 +68,17 @@ type PlatformEvent = {
 
 type CollectRuntime = {
   taskId: string
+  scriptId: string
   startedAt: number
   currentStepIndex: number
+}
+
+function runtimeKey(taskId: string, scriptId: string): string {
+  return `${taskId}::${scriptId}`
+}
+
+function allocationTarget(task: Task, scriptId: string): number {
+  return task.scriptAllocations?.find((a) => a.scriptId === scriptId)?.targetCount ?? 1
 }
 
 function formatTime(iso: string): string {
@@ -81,14 +99,15 @@ function formatElapsed(ms: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-function scriptForTask(task: Task, scripts: TaskScript[]): TaskScript | undefined {
-  if (!task.scriptId) return undefined
-  return scripts.find((s) => s.taskId === task.scriptId)
+function scriptForTask(task: Task, scripts: TaskScript[], scriptId?: string): TaskScript | undefined {
+  const ids = taskScriptIds(task)
+  const targetId = scriptId ?? ids[0]
+  if (!targetId) return undefined
+  return scripts.find((s) => s.taskId === targetId)
 }
 
-function isScriptConfirmed(task: Task, scripts: TaskScript[]): boolean {
-  const s = scriptForTask(task, scripts)
-  return s?.status === 'confirmed'
+function isTaskScriptPackageReady(task: Task, scripts: TaskScript[]): boolean {
+  return allScriptsSchedulable(task, scripts)
 }
 
 function collectionStatusLabel(status: CollectionSession['status']): string {
@@ -202,21 +221,11 @@ function PhoneFrame({ children }: { children: ReactNode }): ReactElement {
 
 export default function CollectionApp(): ReactElement {
   const [platformProps] = usePlatformProps()
-  const [demoTasks, setDemoTasks] = useState<Task[]>(() =>
-    mockTasks.map((t) => ({
-      ...t,
-      scriptException: t.scriptException ? { ...t.scriptException } : undefined,
-    })),
-  )
-  const [demoScripts] = useState<TaskScript[]>(() =>
-    mockTaskScripts.map((s) => ({
-      ...s,
-      propIds: [...s.propIds],
-      atomicActionIds: [...(s.atomicActionIds ?? [])],
-      steps: s.steps.map((step) => ({ ...step })),
-    })),
-  )
+  const [demoTasks] = usePlatformTasks()
+  const [demoScripts] = usePlatformTaskScripts()
+  const setDemoTasks = setPlatformTasksState
 
+  const [taskDetailScriptId, setTaskDetailScriptId] = useState<string | null>(null)
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('pending')
   const [phoneRoute, setPhoneRoute] = useState<PhoneRoute>({ kind: 'tabs' })
   const [collectRuntimes, setCollectRuntimes] = useState<Record<string, CollectRuntime>>({})
@@ -246,7 +255,7 @@ export default function CollectionApp(): ReactElement {
         (t) =>
           t.personnelId === COLLECTOR.id &&
           (t.status === 'scheduled' || t.status === 'ready') &&
-          isScriptConfirmed(t, demoScripts),
+          isTaskScriptPackageReady(t, demoScripts),
       ),
     [demoTasks, demoScripts],
   )
@@ -267,13 +276,44 @@ export default function CollectionApp(): ReactElement {
     return demoTasks.find((t) => t.id === phoneRoute.taskId) ?? null
   }, [phoneRoute, demoTasks])
 
-  const selectedScript = useMemo(
-    () => (selectedTask ? scriptForTask(selectedTask, demoScripts) : undefined),
+  const taskScripts = useMemo(
+    () => (selectedTask ? scriptsForTask(selectedTask, demoScripts) : []),
     [selectedTask, demoScripts],
   )
 
-  const collectRuntime =
-    phoneRoute.kind === 'collect' ? collectRuntimes[phoneRoute.taskId] : undefined
+  const activeScriptId =
+    phoneRoute.kind === 'collect'
+      ? phoneRoute.scriptId
+      : taskScripts.length === 1
+        ? taskScripts[0]?.taskId
+        : undefined
+
+  const selectedScript = useMemo(
+    () =>
+      selectedTask && activeScriptId
+        ? scriptForTask(selectedTask, demoScripts, activeScriptId)
+        : undefined,
+    [selectedTask, demoScripts, activeScriptId],
+  )
+
+  const collectRuntimeKey =
+    phoneRoute.kind === 'collect'
+      ? runtimeKey(phoneRoute.taskId, phoneRoute.scriptId)
+      : undefined
+
+  const collectRuntime = collectRuntimeKey ? collectRuntimes[collectRuntimeKey] : undefined
+
+  useEffect(() => {
+    if (phoneRoute.kind === 'task') {
+      const scripts = scriptsForTask(
+        demoTasks.find((t) => t.id === phoneRoute.taskId) ?? ({} as Task),
+        demoScripts,
+      )
+      setTaskDetailScriptId(scripts.length === 1 ? scripts[0]?.taskId ?? null : null)
+    } else {
+      setTaskDetailScriptId(null)
+    }
+  }, [phoneRoute, demoTasks, demoScripts])
 
   useEffect(() => {
     if (phoneRoute.kind !== 'collect') return
@@ -281,20 +321,27 @@ export default function CollectionApp(): ReactElement {
     return () => window.clearInterval(id)
   }, [phoneRoute])
 
+  const taskDetailScript = useMemo(() => {
+    if (!selectedTask) return undefined
+    const id = taskDetailScriptId ?? taskScripts[0]?.taskId
+    return id ? scriptForTask(selectedTask, demoScripts, id) : undefined
+  }, [selectedTask, taskDetailScriptId, taskScripts, demoScripts])
+
   function showToast(msg: string): void {
     setToast(msg)
     window.setTimeout(() => setToast(null), 3200)
   }
 
-  function startCollect(taskId: string): void {
+  function startCollect(taskId: string, scriptId: string): void {
+    const key = runtimeKey(taskId, scriptId)
     setCollectRuntimes((prev) => {
-      if (prev[taskId]) return prev
+      if (prev[key]) return prev
       return {
         ...prev,
-        [taskId]: { taskId, startedAt: Date.now(), currentStepIndex: 0 },
+        [key]: { taskId, scriptId, startedAt: Date.now(), currentStepIndex: 0 },
       }
     })
-    setPhoneRoute({ kind: 'collect', taskId })
+    setPhoneRoute({ kind: 'collect', taskId, scriptId })
   }
 
   function claimAndGoActive(task: Task, message: string): void {
@@ -329,8 +376,8 @@ export default function CollectionApp(): ReactElement {
       setPhoneTab('active')
     }
     showToast('已上报运营，请继续按台本执行')
-    if (continueCollect) {
-      startCollect(task.id)
+    if (continueCollect && taskDetailScript) {
+      startCollect(task.id, taskDetailScript.taskId)
     } else if (task.status !== 'in_progress') {
       setPhoneRoute({ kind: 'tabs' })
       setPhoneTab('active')
@@ -362,12 +409,13 @@ export default function CollectionApp(): ReactElement {
     showToast('问题已提交至平台')
   }
 
-  function advanceStep(taskId: string, maxIndex: number): void {
+  function advanceStep(taskId: string, scriptId: string, maxIndex: number): void {
+    const key = runtimeKey(taskId, scriptId)
     setCollectRuntimes((prev) => {
-      const rt = prev[taskId]
+      const rt = prev[key]
       if (!rt) return prev
       const next = Math.min(rt.currentStepIndex + 1, maxIndex)
-      return { ...prev, [taskId]: { ...rt, currentStepIndex: next } }
+      return { ...prev, [key]: { ...rt, currentStepIndex: next } }
     })
   }
 
@@ -584,7 +632,7 @@ export default function CollectionApp(): ReactElement {
                   <button
                     type="button"
                     onClick={() =>
-                      advanceStep(selectedTask.id, selectedScript.steps.length - 1)
+                      advanceStep(selectedTask.id, selectedScript.taskId, selectedScript.steps.length - 1)
                     }
                     className="w-full rounded-2xl bg-[#007aff] py-3 text-[15px] font-semibold text-white"
                   >
@@ -608,17 +656,25 @@ export default function CollectionApp(): ReactElement {
                 </button>
               </div>
             </div>
-          ) : phoneRoute.kind === 'task' && selectedTask && selectedScript ? (
+          ) : phoneRoute.kind === 'task' && selectedTask ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center gap-2 border-b border-black/5 bg-white/80 px-4 py-3 backdrop-blur">
                 <button
                   type="button"
-                  onClick={() => setPhoneRoute({ kind: 'tabs' })}
+                  onClick={() => {
+                    if (taskScripts.length > 1 && taskDetailScriptId) {
+                      setTaskDetailScriptId(null)
+                    } else {
+                      setPhoneRoute({ kind: 'tabs' })
+                    }
+                  }}
                   className="rounded-full p-1 text-slate-600"
                 >
                   <ArrowLeft className="size-5" />
                 </button>
-                <h2 className="truncate text-[15px] font-semibold text-slate-900">领取任务</h2>
+                <h2 className="truncate text-[15px] font-semibold text-slate-900">
+                  {taskDetailScript ? '领取台本' : '任务包'}
+                </h2>
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-4">
                 <p className="font-mono text-[13px] font-semibold text-[#007aff]">{selectedTask.id}</p>
@@ -629,43 +685,75 @@ export default function CollectionApp(): ReactElement {
                   <MapPin className="size-3.5 shrink-0" />
                   {selectedTask.scene}
                 </p>
-                <p className="mt-3 flex items-center gap-1 text-[12px] text-slate-500">
-                  <Timer className="size-3.5" />
-                  台本预估 {scriptEstimatedMinutes(selectedScript)} 分钟 ·{' '}
-                  {selectedScript.steps.length} 个步骤
-                </p>
+                {taskScripts.length > 1 && !taskDetailScript && (
+                  <>
+                    <p className="mt-3 text-[12px] text-slate-500">
+                      任务包含 {taskScripts.length} 个台本 · 目标{' '}
+                      {totalTargetCount(selectedTask, demoScripts)} 条采集
+                    </p>
+                    <ul className="mt-3 space-y-2">
+                      {taskScripts.map((script) => (
+                        <li key={script.taskId}>
+                          <button
+                            type="button"
+                            onClick={() => setTaskDetailScriptId(script.taskId)}
+                            className="w-full rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-black/5"
+                          >
+                            <p className="text-[14px] font-semibold text-slate-900 line-clamp-1">
+                              {script.title}
+                            </p>
+                            <p className="mt-1 text-[12px] text-slate-500">
+                              {script.steps.length} 步 · 目标 {allocationTarget(selectedTask, script.taskId)} 条
+                            </p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {taskDetailScript && (
+                  <>
+                    <p className="mt-3 flex items-center gap-1 text-[12px] text-slate-500">
+                      <Timer className="size-3.5" />
+                      台本预估 {scriptEstimatedMinutes(taskDetailScript)} 分钟 ·{' '}
+                      {taskDetailScript.steps.length} 个步骤 · 目标{' '}
+                      {allocationTarget(selectedTask, taskDetailScript.taskId)} 条
+                    </p>
 
-                <div className="mt-4 rounded-2xl bg-white p-3.5 shadow-sm ring-1 ring-black/5">
-                  <p className="text-[12px] font-medium text-slate-400">台本说明</p>
-                  <p className="mt-2 text-[14px] leading-relaxed text-slate-800">
-                    {selectedScript.instruction}
-                  </p>
-                </div>
+                    <div className="mt-4 rounded-2xl bg-white p-3.5 shadow-sm ring-1 ring-black/5">
+                      <p className="text-[12px] font-medium text-slate-400">台本说明</p>
+                      <p className="mt-2 text-[14px] leading-relaxed text-slate-800">
+                        {taskDetailScript.instruction}
+                      </p>
+                    </div>
 
-                <div className="mt-3 rounded-2xl bg-white p-3.5 shadow-sm ring-1 ring-black/5">
-                  <p className="text-[12px] font-medium text-slate-400">核对现场道具（可边执行边上报）</p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {selectedScript.propIds.map((pid) => {
-                      const prop = platformProps.find((p) => p.id === pid)
-                      return (
-                        <span
-                          key={pid}
-                          className="rounded-full bg-[#007aff]/10 px-2.5 py-1 text-[13px] font-medium text-[#007aff]"
-                        >
-                          {prop?.name ?? pid}
-                        </span>
-                      )
-                    })}
-                  </div>
-                </div>
+                    <div className="mt-3 rounded-2xl bg-white p-3.5 shadow-sm ring-1 ring-black/5">
+                      <p className="text-[12px] font-medium text-slate-400">核对现场道具（可边执行边上报）</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {taskDetailScript.propIds.map((pid) => {
+                          const prop = platformProps.find((p) => p.id === pid)
+                          return (
+                            <span
+                              key={pid}
+                              className="rounded-full bg-[#007aff]/10 px-2.5 py-1 text-[13px] font-medium text-[#007aff]"
+                            >
+                              {prop?.name ?? pid}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
+              {taskDetailScript && (
               <div className="shrink-0 space-y-2 border-t border-black/5 bg-white/90 px-4 py-4 pb-6 backdrop-blur">
                 <button
                   type="button"
                   onClick={() => {
                     handlePropMatch(selectedTask)
-                    startCollect(selectedTask.id)
+                    startCollect(selectedTask.id, taskDetailScript.taskId)
                   }}
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#34c759] py-3.5 text-[15px] font-semibold text-white active:opacity-90"
                 >
@@ -681,6 +769,7 @@ export default function CollectionApp(): ReactElement {
                   道具不符，上报并继续采集
                 </button>
               </div>
+              )}
             </div>
           ) : (
             <>
@@ -707,7 +796,14 @@ export default function CollectionApp(): ReactElement {
                       </div>
                     ) : (
                       myPendingTasks.map((task) => {
-                        const script = scriptForTask(task, demoScripts)
+                        const scripts = scriptsForTask(task, demoScripts)
+                        const script = scripts[0]
+                        const packageLabel =
+                          scripts.length > 1
+                            ? `${scripts.length} 台本 · ${totalTargetCount(task, demoScripts)} 条`
+                            : script
+                              ? `预估 ${scriptEstimatedMinutes(script)} 分钟`
+                              : null
                         return (
                           <button
                             key={task.id}
@@ -726,10 +822,8 @@ export default function CollectionApp(): ReactElement {
                                 <p className="mt-1 truncate text-[13px] text-slate-500">
                                   {task.scene}
                                 </p>
-                                {script && (
-                                  <p className="mt-1 text-[11px] text-slate-400">
-                                    预估 {scriptEstimatedMinutes(script)} 分钟
-                                  </p>
+                                {packageLabel && (
+                                  <p className="mt-1 text-[11px] text-slate-400">{packageLabel}</p>
                                 )}
                               </div>
                               <ChevronRight className="mt-1 size-5 shrink-0 text-slate-300" />
@@ -749,7 +843,8 @@ export default function CollectionApp(): ReactElement {
                       </div>
                     ) : (
                       myActiveTasks.map((task) => {
-                        const script = scriptForTask(task, demoScripts)
+                        const scripts = scriptsForTask(task, demoScripts)
+                        const script = scripts[0]
                         const hasException = task.scriptException?.status === 'open'
                         return (
                           <div
@@ -771,19 +866,36 @@ export default function CollectionApp(): ReactElement {
                               {task.type}
                             </p>
                             <p className="mt-1 text-[13px] text-slate-500">{task.scene}</p>
-                            {script && (
+                            {scripts.length > 1 ? (
                               <p className="mt-1 text-[11px] text-slate-400">
-                                {script.steps.length} 步 · 预估{' '}
-                                {scriptEstimatedMinutes(script)} 分钟
+                                {scripts.length} 台本任务包
                               </p>
+                            ) : (
+                              script && (
+                                <p className="mt-1 text-[11px] text-slate-400">
+                                  {script.steps.length} 步 · 预估{' '}
+                                  {scriptEstimatedMinutes(script)} 分钟
+                                </p>
+                              )
                             )}
+                            {scripts.length === 1 && script && (
                             <button
                               type="button"
-                              onClick={() => startCollect(task.id)}
+                              onClick={() => startCollect(task.id, script.taskId)}
                               className="mt-3 w-full rounded-xl bg-[#007aff] py-2.5 text-[14px] font-semibold text-white"
                             >
                               进入采集
                             </button>
+                            )}
+                            {scripts.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setPhoneRoute({ kind: 'task', taskId: task.id })}
+                              className="mt-3 w-full rounded-xl bg-[#007aff] py-2.5 text-[14px] font-semibold text-white"
+                            >
+                              选择台本采集
+                            </button>
+                            )}
                           </div>
                         )
                       })

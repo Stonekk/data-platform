@@ -119,6 +119,7 @@ export function buildLlmUserPrompt(context: GenerateScriptsContext, candidateCou
     difficulty: input.difficulty,
     taskType: input.taskType,
     candidateCount,
+    requirement: context.requirement,
     template: template?.skeleton
       ? {
           id: template.id,
@@ -133,7 +134,10 @@ export function buildLlmUserPrompt(context: GenerateScriptsContext, candidateCou
     ? `有模板：锁定 skeleton 母任务语义，生成 ${candidateCount} 个不同变体（仅改道具状态/约束/动作细节，不改任务本质）。`
     : `无模板：参考黄金样例，生成 ${candidateCount} 个多样化台本。perception 场景可设计静态感知干扰（积水反光/背景杂乱/暗光），不做动态人影电视闪烁。`
 
-  const constraints = `约束：仅使用输入 props 列出的道具；所有候选 difficulty 必须为 ${input.difficulty}，不得混入其他难度档。动作须符合日常常识与道具用途（如玻璃杯不得放入保鲜盒）；不必强行使用全部 props。`
+  const constraints = context.requirement?.keyRequirements?.length
+    ? `需求约束（MUST）：${context.requirement.keyRequirements.join('；')}`
+    : ''
+  const constraintLine = `约束：仅使用输入 props 列出的道具；所有候选 difficulty 必须为 ${input.difficulty}，不得混入其他难度档。动作须符合日常常识与道具用途（如玻璃杯不得放入保鲜盒）；不必强行使用全部 props。`
 
-  return `${instructions}\n${constraints}\n\n输入：\n${JSON.stringify(payload, null, 2)}`
+  return `${instructions}\n${constraintLine}${constraints ? `\n${constraints}` : ''}\n\n输入：\n${JSON.stringify(payload, null, 2)}`
 }

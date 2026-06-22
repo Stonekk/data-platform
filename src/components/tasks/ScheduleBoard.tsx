@@ -32,13 +32,18 @@ import { cn } from '@/lib/utils'
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
+  if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatBoundsTime(ms: number): string {
+  if (Number.isNaN(ms)) return '—'
+  return formatDateTime(new Date(ms).toISOString())
 }
 
 function priorityDotClass(priority: TaskPriority | undefined): string {
@@ -62,6 +67,7 @@ function taskStatusBarClass(task: Task, attention: boolean): string {
 }
 
 const STATUS_LABEL: Record<string, string> = {
+  pending_resources: '待配资源',
   to_schedule: '待调度',
   scheduled: '已排期',
   ready: '待执行',
@@ -292,7 +298,9 @@ export function ScheduleBoard({
                         <td className="px-3 py-2">{task.personnel}</td>
                         <td className="px-3 py-2">{task.scene}</td>
                         <td className="px-3 py-2 font-mono text-text-secondary">
-                          {formatDateTime(task.startTime)} → {formatDateTime(task.endTime)}
+                          {task.startTime && task.endTime
+                            ? `${formatDateTime(task.startTime)} → ${formatDateTime(task.endTime)}`
+                            : '—'}
                         </td>
                         <td className="max-w-[200px] truncate px-3 py-2 text-rose-800">
                           {task.scriptException?.reason ?? task.blockReason ?? '—'}
@@ -308,12 +316,12 @@ export function ScheduleBoard({
       ) : (
         <div className="overflow-hidden rounded-xl border-2 border-slate-200 bg-gradient-to-b from-slate-50 to-white">
           <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-[10px] text-text-secondary">
-            <span>{formatDateTime(new Date(bounds.min).toISOString())}</span>
+            <span>{formatBoundsTime(bounds.min)}</span>
             <span className="inline-flex items-center gap-1">
               <LayoutGrid className="size-3" />
               {laneGroups.length} 条泳道 · {filteredTasks.length} 个任务块
             </span>
-            <span>{formatDateTime(new Date(bounds.min + bounds.range).toISOString())}</span>
+            <span>{formatBoundsTime(bounds.min + bounds.range)}</span>
           </div>
 
           <div className="max-h-[520px] overflow-y-auto">

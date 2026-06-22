@@ -59,6 +59,7 @@ export type ApprovalRecord = {
 };
 
 export type TaskStatus =
+  | 'pending_resources'
   | 'to_schedule'
   | 'scheduled'
   | 'ready'
@@ -243,10 +244,38 @@ export type ScriptTemplateSkeleton = {
   sequence: string[];
 };
 
+export type ScriptReviewStatus = 'candidate' | 'confirmed' | 'rejected'
+
+export type ScriptGenerationMeta = {
+  mode: string
+  durationMs: number
+  score?: number
+  passed?: boolean
+  rejectReason?: string
+}
+
+/** 一次从需求批量生成台本的批次记录 */
+export type RequirementScriptBatch = {
+  id: string
+  requirementId: string
+  createdAt: string
+  targetCount: number
+  generatedCount: number
+  passedCount: number
+  mode: string
+}
+
+/** 台本 → 目标采集条数 */
+export type ScriptTaskAllocation = {
+  scriptId: string
+  targetCount: number
+}
+
 export type TaskScript = {
-  taskId: string;
-  title: string;
-  scheduledTime: string;
+  /** 台本唯一 ID（历史字段名 taskId，与任务单元 ID 解耦） */
+  taskId: string
+  title: string
+  scheduledTime: string
   personnelIds: string[];
   deviceIds: string[];
   steps: TaskScriptStep[];
@@ -254,7 +283,7 @@ export type TaskScript = {
   status: ScriptStatus;
   sceneId: string;
   propIds: string[];
-  /** 命中的原子动作大类 id（cat-a … cat-i） */
+  /** 场景×动作大类 id */
   atomicActionIds: string[];
   difficulty: ScriptDifficulty;
   /** 自然语言任务指令 */
@@ -265,6 +294,14 @@ export type TaskScript = {
   renderedCard?: string;
   confirmedAt?: string;
   confirmedBy?: string;
+  /** 溯源需求 */
+  requirementId?: string;
+  batchId?: string;
+  /** 候选池状态：candidate / confirmed / rejected */
+  reviewStatus?: ScriptReviewStatus;
+  generationMeta?: ScriptGenerationMeta;
+  /** 建议每条台本采集次数（运营可覆盖） */
+  recommendedTargetCount?: number;
 };
 
 export type ScriptException = {
@@ -308,8 +345,12 @@ export type Task = {
   personnelId?: string;
   deviceId?: string;
   sceneId?: string;
-  /** 关联台本 ID（"事"要素），对齐 mockTaskScripts[*].taskId */
+  /** @deprecated 单台本兼容；优先使用 scriptIds */
   scriptId?: string;
+  /** 任务包内台本 ID 列表 */
+  scriptIds?: string[];
+  /** 每个台本的目标采集条数 */
+  scriptAllocations?: ScriptTaskAllocation[];
   /** 采集员道具不符异常（领取后打标） */
   scriptException?: ScriptException;
   /** 关联需求，用于任务拆解溯源；缺失为"孤儿任务"（应补录） */
@@ -1133,24 +1174,25 @@ export const mockRequirements: Requirement[] = [
   },
   {
     id: 'req-013',
-    title: '充电站插枪遥操作（雨天工况）',
+    title: '客厅茶几整理遥操作（托盘取放）',
     status: 'approved',
     dataType: 'teleoperation',
-    scene: '充电站雨棚试验区',
+    sceneType: 'home',
+    scene: '客厅',
     device: '双臂遥操作台 A1',
-    dataVolume: '约 640 GB',
+    dataVolume: '约 480 GB',
     deliveryDate: '2025-05-08',
     createdAt: '2025-03-26T09:15:00+08:00',
-    description: '湿手/手套两种握持，插拔力曲线与视觉对齐；待拆解为采集单元与标定窗口。',
+    description: '茶几杂物归位、托盘端放、杯具入盘三类子任务；待拆解为场景占用与采集单元。',
     owner: '刘桓',
-    requirementGroup: 'CU8-移动机器人',
+    requirementGroup: 'CU6-家庭服务',
     priority: 'P1',
     targetType: 'count',
-    targetValue: '2,400 条',
-    keyRequirements: ['雨天工况与干燥基线各半', '插拔峰值力记录完整', '安全联锁全程录像'],
-    deviceRequirement: '双臂遥操作台 A1 + 防水工位改造套件',
-    annotationRequirement: '插拔阶段分段 + 失败类型（ann-011 草案）',
-    sopLink: 'https://sop.example.com/ev-charge-rain-teleop',
+    targetValue: '1,800 条',
+    keyRequirements: ['托盘边缘抓取稳定', '杯具碰撞声学与力矩对齐', '第三视角无遮挡'],
+    deviceRequirement: '双臂遥操作台 A1 + 客厅茶几标定工位',
+    annotationRequirement: '取放阶段分段 + 滑落失败类型',
+    sopLink: 'https://sop.example.com/living-room-tray-teleop',
     approvals: [
       {
         level: 1,
@@ -1159,7 +1201,7 @@ export const mockRequirements: Requirement[] = [
         approverName: '许明哲',
         decision: 'approved',
         evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
-        opinion: '雨棚档期已锁，可进入拆解排期。',
+        opinion: '客厅档期已锁，可进入拆解排期。',
         actedAt: '2025-03-26T10:00:00+08:00',
       },
       {
@@ -1181,6 +1223,7 @@ export const mockRequirements: Requirement[] = [
     title: '家庭餐桌收拾动捕（多餐具碰撞）',
     status: 'approved',
     dataType: 'motion_capture',
+    sceneType: 'home',
     scene: '厨房',
     device: '动捕套装 M3',
     dataVolume: '约 1.2 TB',
@@ -1222,22 +1265,23 @@ export const mockRequirements: Requirement[] = [
   },
   {
     id: 'req-015',
-    title: '仓储高位货架人体攀爬姿态（安全绳）',
+    title: '主卧衣柜开合与挂衣人体姿态',
     status: 'approved',
     dataType: 'human_body',
-    scene: '仓储分拣区',
+    sceneType: 'home',
+    scene: '主卧',
     device: '可穿戴惯性套装 W1',
-    dataVolume: '约 520 GB',
+    dataVolume: '约 380 GB',
     deliveryDate: '2025-06-02',
     createdAt: '2025-03-28T08:20:00+08:00',
-    description: '攀爬、够取、回身三类姿态，安全员在场；待拆解为受试批次与单次时长单元。',
+    description: '开门、取衣、挂放、关门四类姿态；待拆解为受试批次与单次时长单元。',
     owner: '周仁',
-    requirementGroup: 'CU5-零售物流',
+    requirementGroup: 'CU6-家庭服务',
     priority: 'P2',
     targetType: 'count',
-    targetValue: '5,000 条',
-    keyRequirements: ['安全绳姿态不打点丢失', '高位 ≥ 2.4m 样本占比 ≥ 25%', '受试者体检证明在有效期内'],
-    deviceRequirement: '可穿戴惯性套装 W1 × 3 + 安全员双人岗',
+    targetValue: '3,200 条',
+    keyRequirements: ['柜门开合角度覆盖 30°–120°', '挂衣抬臂姿态无遮挡', '受试者体检证明在有效期内'],
+    deviceRequirement: '可穿戴惯性套装 W1 × 2 + 主卧衣柜标定',
     annotationRequirement: '姿态粗分段 + 疲劳自评量表对齐',
     approvals: [
       {
@@ -1246,8 +1290,8 @@ export const mockRequirements: Requirement[] = [
         approverRole: '采集运营',
         approverName: '许明哲',
         decision: 'approved',
-        evaluation: { feasibility: 'pass', cost: 'warn', efficiency: 'pass', resourceMatch: 'pass' },
-        opinion: '安全预案已备案。',
+        evaluation: { feasibility: 'pass', cost: 'pass', efficiency: 'pass', resourceMatch: 'pass' },
+        opinion: '主卧场景道具已到位。',
         actedAt: '2025-03-28T10:30:00+08:00',
       },
       {

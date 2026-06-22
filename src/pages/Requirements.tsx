@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useMemo,
   useState,
   type FormEvent,
@@ -18,8 +19,6 @@ import {
   type TabItem,
 } from '@/components/ui'
 import {
-  mockRequirements,
-  mockTasks,
   type ApprovalDecision,
   type ApprovalEvaluation,
   type ApprovalRecord,
@@ -32,6 +31,15 @@ import {
   type Task,
   type TaskStatus,
 } from '@/data/mock'
+import {
+  nextRequirementId,
+  normalizeRequirementFields,
+  resetAllPlatformData,
+  simulateRequirementApproval,
+  updatePlatformRequirements,
+  usePlatformRequirements,
+} from '@/data/requirementStore'
+import { usePlatformTasks } from '@/data/taskStore'
 import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
@@ -160,6 +168,7 @@ const FILTER_DEFS: SearchFilterDef[] = [
 ]
 
 const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  pending_resources: '待配资源',
   to_schedule: '待调度',
   scheduled: '已排期',
   ready: '待执行',
@@ -250,35 +259,6 @@ function evalPill(label: string, value: 'pass' | 'warn' | 'fail'): ReactElement 
 // ---------------------------------------------------------------------------
 // 表单与 ID 生成
 // ---------------------------------------------------------------------------
-
-function nextRequirementId(existing: Requirement[]): string {
-  const nums = existing
-    .map((r) => {
-      const m = /^req-(\d+)$/.exec(r.id)
-      return m ? Number(m[1]) : 0
-    })
-    .filter((n) => n > 0)
-  const max = nums.length ? Math.max(...nums) : 0
-  return `req-${String(max + 1).padStart(3, '0')}`
-}
-
-function inferSceneType(scene: string): RequirementSceneType {
-  const t = scene.toLowerCase()
-  if (t.includes('家庭') || t.includes('home')) return 'home'
-  if (t.includes('商务') || t.includes('business')) return 'business'
-  if (t.includes('工厂') || t.includes('factory')) return 'factory'
-  if (t.includes('充电') || t.includes('charging')) return 'charging'
-  if (t.includes('道路') || t.includes('public')) return 'public'
-  return 'other'
-}
-
-function normalizeRequirementFields(row: Requirement): Requirement {
-  return {
-    ...row,
-    sceneType: row.sceneType ?? inferSceneType(row.scene),
-    dataPurpose: row.dataPurpose ?? 'training',
-  }
-}
 
 function csvEscape(value: string): string {
   if (value.includes('"') || value.includes(',') || value.includes('\n')) {
@@ -432,11 +412,12 @@ function LinkedTasksTable({
 }: {
   taskIds: string[]
 }): ReactElement {
+  const [platformTasks] = usePlatformTasks()
   const tasks = useMemo<Task[]>(() => {
     return taskIds
-      .map((id) => mockTasks.find((t) => t.id === id))
+      .map((id) => platformTasks.find((t) => t.id === id))
       .filter((t): t is Task => t !== undefined)
-  }, [taskIds])
+  }, [taskIds, platformTasks])
 
   if (tasks.length === 0) {
     return (
@@ -478,9 +459,8 @@ function LinkedTasksTable({
 type DetailTab = 'basic' | 'approval' | 'tasks'
 
 export default function Requirements(): ReactElement {
-  const [requirements, setRequirements] = useState<Requirement[]>(() =>
-    mockRequirements.map((row) => normalizeRequirementFields(row)),
-  )
+  const [requirements] = usePlatformRequirements()
+  const [platformTasks] = usePlatformTasks()
   const [activeTab, setActiveTab] = useState<string>('all')
   const [searchValue, setSearchValue] = useState<string>('')
   const [activeFilters, setActiveFilters] = useState<Record<string, string>>({
@@ -492,6 +472,12 @@ export default function Requirements(): ReactElement {
   const [newOpen, setNewOpen] = useState<boolean>(false)
   const [newForm, setNewForm] = useState<NewRequirementForm>(emptyForm)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!selected) return
+    const fresh = requirements.find((row) => row.id === selected.id)
+    if (fresh) setSelected(fresh)
+  }, [requirements, selected?.id])
 
   const handleTabChange = (key: string): void => {
     setActiveTab(key)
@@ -593,8 +579,8 @@ export default function Requirements(): ReactElement {
   }
 
   const taskById = useMemo(() => {
-    return new Map(mockTasks.map((task) => [task.id, task]))
-  }, [])
+    return new Map(platformTasks.map((task) => [task.id, task]))
+  }, [platformTasks])
 
   const requirementTaskProgress = (row: Requirement): number => {
     if (row.linkedTaskIds.length === 0) return 0
@@ -666,7 +652,7 @@ export default function Requirements(): ReactElement {
       patch.progress = 100
     }
 
-    setRequirements((prev) =>
+    updatePlatformRequirements((prev) =>
       prev.map((row) => (row.id === requirementId ? { ...row, ...patch } : row)),
     )
     setSelected((prev) => (prev && prev.id === requirementId ? { ...prev, ...patch } : prev))
@@ -780,7 +766,7 @@ export default function Requirements(): ReactElement {
       linkedTaskIds: [],
       progress: 0,
     }
-    setRequirements((prev) => [normalizeRequirementFields(row), ...prev])
+    updatePlatformRequirements((prev) => [normalizeRequirementFields(row), ...prev])
     setNewOpen(false)
     setNewForm(emptyForm)
   }
@@ -799,8 +785,21 @@ export default function Requirements(): ReactElement {
           <p className="mt-1 text-sm text-text-secondary">
             覆盖需求提报 → 审批 → 拆解 → 执行 → 关闭全链路
           </p>
+          <p className="mt-1 text-xs text-text-secondary">
+            原型数据保存在浏览器本地（localStorage），需求、任务与台本在各页面间共享。
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              resetAllPlatformData()
+              setStatusMessage('已恢复演示种子数据（需求、任务、台本）。')
+            }}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-border bg-white px-4 text-sm font-medium text-text-secondary shadow-sm transition-colors hover:bg-slate-50"
+          >
+            恢复演示数据
+          </button>
           <button
             type="button"
             onClick={exportFilteredCsv}
@@ -869,6 +868,22 @@ export default function Requirements(): ReactElement {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {(selected.status === 'submitted' || selected.status === 'reviewing') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ok = simulateRequirementApproval(selected.id)
+                        if (ok) {
+                          setStatusMessage('已模拟审批通过，可在「任务管理 → 任务拆解」中拆解。')
+                        } else {
+                          setStatusMessage('仅「已提交 / 审批中」状态可一键审批。')
+                        }
+                      }}
+                      className="h-8 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-800 transition-colors hover:bg-emerald-100"
+                    >
+                      演示：一键审批通过
+                    </button>
+                  )}
                   {(() => {
                     const nextStatus = REQUIREMENT_MAINLINE_NEXT[selected.status]
                     if (nextStatus === undefined) return null

@@ -16,6 +16,12 @@ import { checkPropsApproval } from '@/lib/propApproval'
 
 export const SCRIPT_CANDIDATE_COUNT = 3
 
+export const SCRIPT_DIFFICULTY_LABEL: Record<ScriptDifficulty, string> = {
+  simple: '简单',
+  complex: '复杂',
+  correction: '纠正',
+}
+
 export type ScriptDraftInput = {
   taskId: string
   title: string

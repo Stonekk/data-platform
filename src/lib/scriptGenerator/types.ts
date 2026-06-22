@@ -41,6 +41,13 @@ export type GenerateScriptsContext = {
     sceneSubtype: string
     description: string
     safetyTier?: SceneSafetyTier
+    type?: string
+  }
+  /** 溯源需求约束，供 LLM 生成时遵守 */
+  requirement?: {
+    title: string
+    keyRequirements: string[]
+    targetValue: string
   }
 }
 

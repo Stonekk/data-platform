@@ -42,6 +42,7 @@ const BOARD_STATUSES: TaskStatus[] = [
   'in_progress',
   'completed',
   'closed',
+  'pending_resources',
   'to_schedule',
 ]
 
@@ -104,7 +105,11 @@ export function filterBoardTasks(
   if (filter === 'scheduled') {
     return tasks.filter((t) => t.status === 'scheduled' || t.status === 'ready')
   }
-  if (filter === 'to_schedule') return tasks.filter((t) => t.status === 'to_schedule')
+  if (filter === 'to_schedule') {
+    return tasks.filter(
+      (t) => t.status === 'to_schedule' || t.status === 'pending_resources',
+    )
+  }
   return tasks.filter((t) => needsAttention(t, readinessMap.get(t.id)) !== null)
 }
 
@@ -122,7 +127,9 @@ export function boardStats(
   return {
     inProgress: tasks.filter((t) => t.status === 'in_progress').length,
     scheduled: tasks.filter((t) => t.status === 'scheduled' || t.status === 'ready').length,
-    toSchedule: tasks.filter((t) => t.status === 'to_schedule').length,
+    toSchedule: tasks.filter(
+      (t) => t.status === 'to_schedule' || t.status === 'pending_resources',
+    ).length,
     attention: attention.length,
     exception: tasks.filter((t) => t.scriptException?.status === 'open').length,
   }
@@ -133,10 +140,9 @@ export function computeTimeBounds(tasks: Task[], anchor = new Date()): {
   max: number
   range: number
 } {
-  const times = tasks.flatMap((t) => [
-    new Date(t.startTime).getTime(),
-    new Date(t.endTime).getTime(),
-  ])
+  const times = tasks
+    .flatMap((t) => [new Date(t.startTime).getTime(), new Date(t.endTime).getTime()])
+    .filter((t) => !Number.isNaN(t))
   if (times.length === 0) {
     const start = new Date(anchor)
     start.setHours(0, 0, 0, 0)

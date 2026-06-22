@@ -1,6 +1,6 @@
 import type { Task, TaskScript } from '@/data/mock'
 import { computeReadiness } from '@/lib/taskReadiness'
-import { isScriptSchedulable } from '@/lib/scriptWorkflow'
+import { allScriptsSchedulable } from '@/lib/taskScriptAccess'
 
 export type AutoScheduleResult = {
   nextTasks: Task[]
@@ -58,11 +58,8 @@ export function runAutoSchedule(
       skipped.push({ taskId: task.id, reason: '资源阻塞，跳过自动排期' })
       continue
     }
-    const script = task.scriptId
-      ? scripts.find((s) => s.taskId === task.scriptId)
-      : undefined
-    if (!isScriptSchedulable(script)) {
-      skipped.push({ taskId: task.id, reason: '台本未确认绑定' })
+    if (!allScriptsSchedulable(task, scripts)) {
+      skipped.push({ taskId: task.id, reason: '台本未全部确认绑定' })
       continue
     }
 

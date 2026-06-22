@@ -4,11 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  Copy,
-  GitBranch,
   Link2,
-  Plus,
-  X,
   XCircle,
 } from 'lucide-react'
 
@@ -20,8 +16,16 @@ import {
   type SearchFilterDef,
   StatusBadge,
 } from '@/components/ui'
-import { mockDevices, mockPersonnel, mockRequirements, mockScenes, mockTaskScripts, mockTasks, type Requirement, type Task, type TaskPriority, type TaskScript, type TaskStatus } from '@/data/mock'
+import { mockDevices, mockPersonnel, mockScenes, type Requirement, type Task, type TaskPriority, type TaskStatus } from '@/data/mock'
+import { getPlatformRequirements, updatePlatformRequirements, usePlatformRequirements } from '@/data/requirementStore'
+import {
+  setPlatformTaskScriptsState,
+  setPlatformTasksState,
+  usePlatformTaskScripts,
+  usePlatformTasks,
+} from '@/data/taskStore'
 import { ScheduleBoard } from '@/components/tasks/ScheduleBoard'
+import { ScriptFirstDecomposition } from '@/components/tasks/ScriptFirstDecomposition'
 import {
   ScriptConfigPanel,
   type ScriptWizardStep,
@@ -30,7 +34,15 @@ import { ScriptContentCard } from '@/components/tasks/ScriptContentCard'
 import { usePlatformProps } from '@/data/propStore'
 import { usePlatformVenues } from '@/data/venueStore'
 import { runAutoSchedule } from '@/lib/autoSchedule'
+import { syncRequirementsByTasks } from '@/lib/requirementSync'
 import { generateDemoScheduleTasks } from '@/lib/scheduleBoard'
+import {
+  allScriptsSchedulable,
+  scriptCountLabel,
+  scriptsForTask,
+  taskScriptIds,
+  totalTargetCount,
+} from '@/lib/taskScriptAccess'
 import { applyOpsScriptFix, isScriptSchedulable } from '@/lib/scriptWorkflow'
 import { cn } from '@/lib/utils'
 import {
@@ -57,7 +69,7 @@ const TASK_TAB_META: Record<TaskTab, { title: string; description: string }> = {
   },
   decomposition: {
     title: '任务拆解',
-    description: '从已批准需求拆解任务单元，配置台本并绑定人员、设备与场景',
+    description: '台本确认 → 人工分组 → 生成任务单元；资源编排在任务列表完成后再调度',
   },
   schedule: {
     title: '任务调度',
@@ -66,6 +78,7 @@ const TASK_TAB_META: Record<TaskTab, { title: string; description: string }> = {
 }
 
 const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  pending_resources: '待配资源',
   to_schedule: '待调度',
   scheduled: '已排期',
   ready: '待执行',
@@ -75,6 +88,7 @@ const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
 }
 
 const ALL_STATUSES: TaskStatus[] = [
+  'pending_resources',
   'to_schedule',
   'scheduled',
   'ready',
@@ -84,6 +98,7 @@ const ALL_STATUSES: TaskStatus[] = [
 ]
 
 const MAINLINE_NEXT_STATUS: Partial<Record<TaskStatus, TaskStatus>> = {
+  pending_resources: 'to_schedule',
   to_schedule: 'scheduled',
   scheduled: 'ready',
   ready: 'in_progress',
@@ -171,19 +186,6 @@ function overallBadge(overall: TaskReadiness['overall']): {
     icon: <XCircle className="size-4" strokeWidth={1.75} aria-hidden />,
     cls: 'bg-rose-50 text-rose-800 ring-rose-200',
   }
-}
-
-type DecompositionDraftUnit = {
-  id: string
-  type: string
-  priority: TaskPriority
-  personnelId: string
-  deviceId: string
-  sceneId: string
-  startTime: string
-  endTime: string
-  scriptId: string
-  selected: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -294,29 +296,12 @@ export default function Tasks(): ReactElement {
     : 'list'
   const tabMeta = TASK_TAB_META[activeTab]
   const invalidTab = tabParam !== undefined && !TASK_TABS.includes(tabParam as TaskTab)
-  const [tasks, setTasks] = useState<Task[]>(() =>
-    mockTasks.map((t) => ({ ...t })),
-  )
-  const [taskScripts, setTaskScripts] = useState<TaskScript[]>(() =>
-    mockTaskScripts.map((s) => ({
-      ...s,
-      propIds: [...s.propIds],
-      atomicActionIds: [...(s.atomicActionIds ?? [])],
-      steps: s.steps.map((step) => ({ ...step })),
-    })),
-  )
+  const [tasks] = usePlatformTasks()
+  const [taskScripts] = usePlatformTaskScripts()
+  const setTasks = setPlatformTasksState
+  const setTaskScripts = setPlatformTaskScriptsState
   const [platformProps, setPlatformProps] = usePlatformProps()
-  const [requirements, setRequirements] = useState<Requirement[]>(() =>
-    mockRequirements.map((r) => ({
-      ...r,
-      linkedTaskIds: [...r.linkedTaskIds],
-      approvals: r.approvals.map((a) => ({
-        ...a,
-        evaluation: a.evaluation ? { ...a.evaluation } : undefined,
-      })),
-      keyRequirements: [...r.keyRequirements],
-    })),
-  )
+  const [requirements] = usePlatformRequirements()
 
   const [search, setSearch] = useState<string>('')
   const [activeFilters, setActiveFilters] = useState<Record<string, string>>({
@@ -324,29 +309,21 @@ export default function Tasks(): ReactElement {
     readiness: 'all',
   })
   const [detailTask, setDetailTask] = useState<Task | null>(null)
+  const [resourceDraft, setResourceDraft] = useState({
+    personnelId: '',
+    deviceId: '',
+    sceneId: '',
+  })
   const [detailScriptWizard, setDetailScriptWizard] = useState<ScriptWizardStep>('configure')
   const [exceptionFixDraft, setExceptionFixDraft] = useState<string>('')
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
   // 任务拆解 Tab
   const [selectedReqId, setSelectedReqId] = useState<string>(
     () =>
-      mockRequirements.find((r) =>
+      getPlatformRequirements().find((r) =>
         DECOMPOSABLE_REQ_STATUSES.includes(r.status),
       )?.id ?? '',
   )
-  const [decompositionDrafts, setDecompositionDrafts] = useState<DecompositionDraftUnit[]>([])
-  const [activeDraftId, setActiveDraftId] = useState<string | null>(null)
-  const [decompositionMessage, setDecompositionMessage] = useState<string | null>(null)
-  const [resourcePanelTab, setResourcePanelTab] = useState<'personnel' | 'device' | 'scene' | 'window'>('personnel')
-  const [resourceKeyword, setResourceKeyword] = useState<string>('')
-  const [resourceOnlyAvailable, setResourceOnlyAvailable] = useState<boolean>(true)
-  const [resourceShowAll, setResourceShowAll] = useState<boolean>(false)
-  const [decompositionWizardStep, setDecompositionWizardStep] = useState<1 | 2 | 3>(1)
-
-  useEffect(() => {
-    setDecompositionWizardStep(1)
-  }, [activeDraftId])
-
   // 任务调度 Tab（手动：仅排时间窗，人/设备/场已在拆解阶段绑定）
   const [scheduleSelectedIds, setScheduleSelectedIds] = useState<string[]>([])
   const [scheduleFormStart, setScheduleFormStart] = useState<string>('2025-04-02T09:00')
@@ -387,20 +364,20 @@ export default function Tasks(): ReactElement {
     )
   }, [requirements])
 
+  useEffect(() => {
+    if (decomposableRequirements.length === 0) {
+      if (selectedReqId !== '') setSelectedReqId('')
+      return
+    }
+    if (!selectedReqId || !decomposableRequirements.some((r) => r.id === selectedReqId)) {
+      setSelectedReqId(decomposableRequirements[0]!.id)
+    }
+  }, [decomposableRequirements, selectedReqId])
+
   const selectedRequirement = useMemo(() => {
     if (selectedReqId === '') return null
     return requirementById.get(selectedReqId) ?? null
   }, [selectedReqId, requirementById])
-
-  useEffect(() => {
-    setDecompositionDrafts([])
-    setActiveDraftId(null)
-    setDecompositionMessage(null)
-  }, [selectedReqId])
-
-  useEffect(() => {
-    setResourceShowAll(false)
-  }, [resourcePanelTab, resourceKeyword, resourceOnlyAvailable])
 
   const selectedReqTasks = useMemo(() => {
     if (selectedRequirement === null) return [] as Task[]
@@ -509,6 +486,22 @@ export default function Tasks(): ReactElement {
         },
       },
       {
+        key: 'scriptPackage',
+        title: '台本包',
+        render: (row) => {
+          const ids = taskScriptIds(row)
+          const total = totalTargetCount(row, taskScripts)
+          return (
+            <span className="text-xs text-text-secondary">
+              {scriptCountLabel(row)}
+              {ids.length > 0 && (
+                <span className="ml-1 tabular-nums text-text">· {total} 条</span>
+              )}
+            </span>
+          )
+        },
+      },
+      {
         key: 'scriptAlert',
         title: '台本预警',
         render: (row) => {
@@ -519,14 +512,13 @@ export default function Tasks(): ReactElement {
               </span>
             )
           }
-          const script = row.scriptId
-            ? taskScripts.find((s) => s.taskId === row.scriptId)
-            : undefined
-          if (!script) return '—'
-          if (script.status === 'draft') {
+          const bound = scriptsForTask(row, taskScripts)
+          if (bound.length === 0) return '—'
+          const drafts = bound.filter((s) => s.status === 'draft')
+          if (drafts.length > 0) {
             return (
               <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-900 ring-1 ring-inset ring-amber-200">
-                待确认
+                {drafts.length > 1 ? `${drafts.length} 台本待确认` : '待确认'}
               </span>
             )
           }
@@ -559,7 +551,7 @@ export default function Tasks(): ReactElement {
   function runAutoScheduleNow(): void {
     const result = runAutoSchedule(tasks, taskScripts)
     setTasks(result.nextTasks)
-    setRequirements((prev) => syncRequirementsByTasks(prev, result.nextTasks))
+    updatePlatformRequirements((prev) => syncRequirementsByTasks(prev, result.nextTasks))
     setAutoScheduleLastRun(new Date().toISOString())
     setAutoScheduleLog(result.logLines)
     const msg =
@@ -611,223 +603,11 @@ export default function Tasks(): ReactElement {
         : t,
     )
     setTasks(nextTasks)
-    setRequirements((prev) => syncRequirementsByTasks(prev, nextTasks))
+    updatePlatformRequirements((prev) => syncRequirementsByTasks(prev, nextTasks))
     setScheduleSelectedIds([])
     setScheduleMessage(
       `已提交手动调度：${targets.length} 条任务单元 待调度 → 已排期（${formatDateTime(startIso)} → ${formatDateTime(endIso)}）`,
     )
-  }
-
-  function buildDraftUnit(seed: number, baseType: string): DecompositionDraftUnit {
-    const startHour = 9 + seed * 2
-    const endHour = startHour + 2
-    const start = `2025-04-02T${String(startHour).padStart(2, '0')}:00`
-    const end = `2025-04-02T${String(endHour).padStart(2, '0')}:00`
-    return {
-      id: `unit-${Date.now()}-${seed}`,
-      type: baseType,
-      priority: 'medium',
-      personnelId: '',
-      deviceId: '',
-      sceneId: '',
-      startTime: start,
-      endTime: end,
-      scriptId: '',
-      selected: seed === 0,
-    }
-  }
-
-  function generateDraftUnitsFromRequirement(): void {
-    if (selectedRequirement === null) return
-    const baseType =
-      selectedRequirement.dataType === 'teleoperation'
-        ? '遥操作采集'
-        : selectedRequirement.dataType === 'motion_capture'
-          ? '动捕采集'
-          : '人体数据采集'
-    const constraints = selectedRequirement.keyRequirements.slice(0, 4)
-    const nextUnits =
-      constraints.length > 0
-        ? constraints.map((constraint, idx) => ({
-            ...buildDraftUnit(idx, `${baseType} · ${constraint}`),
-            priority: (
-              selectedRequirement.priority === 'P0'
-                ? 'high'
-                : selectedRequirement.priority === 'P1'
-                  ? 'medium'
-                  : 'low'
-            ) as TaskPriority,
-          }))
-        : [buildDraftUnit(0, `${baseType} · 主流程任务`)]
-    setDecompositionDrafts(nextUnits)
-    setActiveDraftId(nextUnits[0]?.id ?? null)
-    setDecompositionMessage(`已根据需求约束生成 ${nextUnits.length} 条任务单元草案。`)
-  }
-
-  function updateDraftUnit(unitId: string, patch: Partial<DecompositionDraftUnit>): void {
-    setDecompositionDrafts((prev) =>
-      prev.map((unit) => (unit.id === unitId ? { ...unit, ...patch } : unit)),
-    )
-  }
-
-  function copyDraftUnit(unitId: string): void {
-    const current = decompositionDrafts.find((unit) => unit.id === unitId)
-    if (!current) return
-    const copied: DecompositionDraftUnit = {
-      ...current,
-      id: `unit-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
-      selected: false,
-    }
-    setDecompositionDrafts((prev) => [copied, ...prev])
-    setDecompositionMessage('已复制 1 条任务单元。')
-  }
-
-  function removeDraftUnit(unitId: string): void {
-    setDecompositionDrafts((prev) => {
-      const next = prev.filter((unit) => unit.id !== unitId)
-      const nextActive = next[0]?.id ?? null
-      if (activeDraftId === unitId) {
-        setActiveDraftId(nextActive)
-      }
-      return next
-    })
-    setDecompositionMessage('已删除 1 条任务单元。')
-  }
-
-  function toggleDraftSelection(unitId: string): void {
-    setDecompositionDrafts((prev) =>
-      prev.map((unit) =>
-        unit.id === unitId ? { ...unit, selected: !unit.selected } : unit,
-      ),
-    )
-  }
-
-  function assignResourceToDrafts(
-    field: 'personnelId' | 'deviceId' | 'sceneId',
-    value: string,
-  ): void {
-    setDecompositionDrafts((prev) => {
-      const selectedIds = prev.filter((unit) => unit.selected).map((unit) => unit.id)
-      const targetId = selectedIds.length > 0 ? null : activeDraftId
-      return prev.map((unit) => {
-        const hit = selectedIds.length > 0 ? selectedIds.includes(unit.id) : unit.id === targetId
-        return hit ? { ...unit, [field]: value } : unit
-      })
-    })
-  }
-
-  function assignTimeWindowToDrafts(startTime: string, endTime: string): void {
-    setDecompositionDrafts((prev) => {
-      const selectedIds = prev.filter((unit) => unit.selected).map((unit) => unit.id)
-      const targetId = selectedIds.length > 0 ? null : activeDraftId
-      return prev.map((unit) => {
-        const hit = selectedIds.length > 0 ? selectedIds.includes(unit.id) : unit.id === targetId
-        return hit ? { ...unit, startTime, endTime } : unit
-      })
-    })
-  }
-
-  function batchSetPriority(priority: TaskPriority): void {
-    setDecompositionDrafts((prev) => {
-      const selectedIds = prev.filter((unit) => unit.selected).map((unit) => unit.id)
-      return prev.map((unit) =>
-        selectedIds.includes(unit.id) ? { ...unit, priority } : unit,
-      )
-    })
-  }
-
-  function commitDraftUnitsToTasks(): void {
-    if (selectedRequirement === null) return
-    if (decompositionDrafts.length === 0) {
-      setDecompositionMessage('请先生成或添加任务单元。')
-      return
-    }
-    const invalid = decompositionDrafts.find(
-      (unit) =>
-        unit.type.trim() === '' ||
-        unit.personnelId === '' ||
-        unit.deviceId === '' ||
-        unit.sceneId === '',
-    )
-    if (invalid) {
-      setDecompositionMessage('仍有任务单元缺少人/设备/场/类型，请先补齐后再提交。')
-      return
-    }
-
-    let numericMax = tasks.reduce((max, task) => {
-      const num = Number.parseInt(task.id.replace('task-', ''), 10)
-      return Number.isNaN(num) ? max : Math.max(max, num)
-    }, 0)
-
-    const newTasks: Task[] = decompositionDrafts.map((unit) => {
-      numericMax += 1
-      const nextId = `task-${String(numericMax).padStart(3, '0')}`
-      const scriptKey = unit.scriptId.trim() || unit.id
-      const hasScript = taskScripts.some((s) => s.taskId === scriptKey)
-      const person = mockPersonnel.find((p) => p.id === unit.personnelId)
-      const device = mockDevices.find((d) => d.id === unit.deviceId)
-      const scene = mockScenes.find((s) => s.id === unit.sceneId)
-      return {
-        id: nextId,
-        type: unit.type.trim(),
-        status: 'to_schedule',
-        priority: unit.priority,
-        requirementId: selectedRequirement.id,
-        personnelId: unit.personnelId,
-        deviceId: unit.deviceId,
-        sceneId: unit.sceneId,
-        scriptId: hasScript ? nextId : undefined,
-        personnel: person?.name ?? unit.personnelId,
-        device: device?.name ?? unit.deviceId,
-        scene: scene?.name ?? unit.sceneId,
-        startTime: new Date(unit.startTime).toISOString(),
-        endTime: new Date(unit.endTime).toISOString(),
-      }
-    })
-
-    if (decompositionDrafts.some((unit) => {
-      const scriptKey = unit.scriptId.trim() || unit.id
-      const script = taskScripts.find((s) => s.taskId === scriptKey)
-      return script !== undefined && !isScriptSchedulable(script)
-    })) {
-      setDecompositionMessage('存在未确认绑定的台本，请确认后再入库（任务可入库但不可调度）。')
-    }
-
-    setTaskScripts((prev) =>
-      prev.map((script) => {
-        const draftUnit = decompositionDrafts.find(
-          (unit) => unit.scriptId.trim() === script.taskId || unit.id === script.taskId,
-        )
-        if (!draftUnit) return script
-        const taskIndex = decompositionDrafts.indexOf(draftUnit)
-        const nextTaskId = newTasks[taskIndex]?.id
-        if (!nextTaskId) return script
-        return {
-          ...script,
-          taskId: nextTaskId,
-          personnelIds: draftUnit.personnelId ? [draftUnit.personnelId] : script.personnelIds,
-          deviceIds: draftUnit.deviceId ? [draftUnit.deviceId] : script.deviceIds,
-        }
-      }),
-    )
-
-    const newIds = newTasks.map((task) => task.id)
-    const nextTasks = [...newTasks, ...tasks]
-    setTasks(nextTasks)
-    setRequirements((prev) => {
-      const linked = prev.map((req) => {
-        if (req.id !== selectedRequirement.id) return req
-        return {
-          ...req,
-          status: req.status === 'approved' ? 'decomposed' : req.status,
-          linkedTaskIds: [...req.linkedTaskIds, ...newIds],
-        }
-      })
-      return syncRequirementsByTasks(linked, nextTasks)
-    })
-    setDecompositionDrafts([])
-    setActiveDraftId(null)
-    setDecompositionMessage(`已生成 ${newTasks.length} 条任务单元并写入任务管理。`)
   }
 
   function applyExceptionScriptFix(taskId: string): void {
@@ -896,65 +676,66 @@ export default function Tasks(): ReactElement {
     setDetailTask(task)
     setTransitionMessage(null)
     setDetailScriptWizard('configure')
+    setResourceDraft({
+      personnelId: task.personnelId ?? '',
+      deviceId: task.deviceId ?? '',
+      sceneId: task.sceneId ?? '',
+    })
     const script = task.scriptId
       ? taskScripts.find((s) => s.taskId === task.scriptId)
       : undefined
     setExceptionFixDraft(script?.instruction ?? '')
   }
 
-  function syncRequirementsByTasks(prev: Requirement[], nextTasks: Task[]): Requirement[] {
-    const taskMap = new Map(nextTasks.map((task) => [task.id, task]))
-    return prev.map((req) => {
-      if (req.linkedTaskIds.length === 0) return req
-      const related = req.linkedTaskIds
-        .map((id) => taskMap.get(id))
-        .filter((task): task is Task => task !== undefined)
-      if (related.length === 0) return req
-      const finishedCount = related.filter(
-        (task) => task.status === 'completed' || task.status === 'closed',
-      ).length
-      const progress = Math.round((finishedCount / related.length) * 100)
-      const activeTaskCount = related.filter(
-        (task) => task.status !== 'completed' && task.status !== 'closed',
-      ).length
-      const blockingTasks = related.filter((task) => {
-        const unfinished = task.status !== 'completed' && task.status !== 'closed'
-        return unfinished && task.blockReason !== undefined && task.blockReason.trim() !== ''
-      })
+  function saveTaskResources(taskId: string): void {
+    const task = tasks.find((t) => t.id === taskId)
+    if (!task) return
+    const person = mockPersonnel.find((p) => p.id === resourceDraft.personnelId)
+    const device = mockDevices.find((d) => d.id === resourceDraft.deviceId)
+    const scene = mockScenes.find((s) => s.id === resourceDraft.sceneId)
+    const hasAll =
+      resourceDraft.personnelId !== '' &&
+      resourceDraft.deviceId !== '' &&
+      resourceDraft.sceneId !== ''
+    const patch: Task = {
+      ...task,
+      personnelId: resourceDraft.personnelId || undefined,
+      deviceId: resourceDraft.deviceId || undefined,
+      sceneId: resourceDraft.sceneId || undefined,
+      personnel: person?.name ?? '待指派',
+      device: device?.name ?? '待指派',
+      scene: scene?.name ?? task.scene,
+      status: hasAll && task.status === 'pending_resources' ? 'to_schedule' : task.status,
+    }
+    const nextTasks = tasks.map((t) => (t.id === taskId ? patch : t))
+    setTasks(nextTasks)
+    updatePlatformRequirements((prev) => syncRequirementsByTasks(prev, nextTasks))
+    setDetailTask(patch)
+    setTransitionMessage(
+      hasAll
+        ? '资源编排已保存，任务已进入「待调度」'
+        : '已保存部分资源，请补全人 / 设备 / 场地后再调度',
+    )
+  }
 
-      const nextReq: Requirement = {
-        ...req,
-        progress,
-        actualFinishAt: progress === 100 ? req.actualFinishAt ?? new Date().toISOString() : undefined,
-      }
-
-      if (progress === 100 && ['approved', 'decomposed', 'executing', 'blocked', 'completed'].includes(req.status)) {
-        nextReq.status = 'completed'
-        nextReq.blockReason = undefined
-        return nextReq
-      }
-
-      if (blockingTasks.length > 0 && ['approved', 'decomposed', 'executing', 'blocked', 'completed'].includes(req.status)) {
-        nextReq.status = 'blocked'
-        nextReq.blockReason = `任务阻塞：${blockingTasks.map((task) => `${task.id}(${task.blockReason})`).join('；')}`
-        return nextReq
-      }
-
-      if (activeTaskCount > 0 && ['approved', 'decomposed', 'executing', 'blocked', 'completed'].includes(req.status)) {
-        nextReq.status = 'executing'
-        nextReq.blockReason = undefined
-        return nextReq
-      }
-
-      if (related.length > 0 && progress === 0 && ['approved', 'decomposed', 'blocked'].includes(req.status)) {
-        nextReq.status = 'decomposed'
-        nextReq.blockReason = undefined
-      }
-      return nextReq
-    })
+  function taskNeedsResourceAssignment(task: Task): boolean {
+    return (
+      task.status === 'pending_resources' ||
+      !task.personnelId ||
+      !task.deviceId ||
+      !task.sceneId
+    )
   }
 
   function validateMainlineGate(task: Task, nextStatus: TaskStatus): string | null {
+    if (nextStatus === 'to_schedule') {
+      if (!task.personnelId || !task.deviceId || !task.sceneId) {
+        return '闸口未通过：请先完成人 / 设备 / 场地资源编排。'
+      }
+      if (!allScriptsSchedulable(task, taskScripts)) {
+        return '闸口未通过：台本未全部确认，不可进入待调度。'
+      }
+    }
     if (nextStatus === 'scheduled') {
       const start = new Date(task.startTime).getTime()
       const end = new Date(task.endTime).getTime()
@@ -964,7 +745,7 @@ export default function Tasks(): ReactElement {
       const script = task.scriptId
         ? taskScripts.find((s) => s.taskId === task.scriptId)
         : undefined
-      if (!isScriptSchedulable(script)) {
+      if (!isScriptSchedulable(script) && !allScriptsSchedulable(task, taskScripts)) {
         return '闸口未通过：台本未确认绑定，不可进入调度。'
       }
     }
@@ -998,556 +779,46 @@ export default function Tasks(): ReactElement {
       task.id === taskId ? { ...task, status: nextStatus } : task,
     )
     setTasks(nextTasks)
-    setRequirements((prev) => syncRequirementsByTasks(prev, nextTasks))
+    updatePlatformRequirements((prev) => syncRequirementsByTasks(prev, nextTasks))
     setDetailTask((prev) => (prev && prev.id === taskId ? { ...prev, status: nextStatus } : prev))
     setTransitionMessage(`已推进：${TASK_STATUS_LABEL[current.status]} -> ${TASK_STATUS_LABEL[nextStatus]}`)
   }
 
-  // ---------- 任务拆解 Tab 内部组件 ----------
+  // ---------- 任务拆解 Tab（V2.3.0 台本优先）----------
 
   function renderDecompositionTab(): ReactElement {
-    const activeDraft =
-      decompositionDrafts.find((unit) => unit.id === activeDraftId) ?? null
-    const timeWindowOptions = [
-      { id: 'w1', label: '上午档 09:00-12:00', startTime: '2025-04-02T09:00', endTime: '2025-04-02T12:00' },
-      { id: 'w2', label: '下午档 13:30-17:00', startTime: '2025-04-02T13:30', endTime: '2025-04-02T17:00' },
-      { id: 'w3', label: '夜间档 19:00-22:00', startTime: '2025-04-02T19:00', endTime: '2025-04-02T22:00' },
-    ]
+    function linkRequirementTasks(
+      requirementId: string,
+      newTaskIds: string[],
+      allTasks: Task[],
+    ): void {
+      updatePlatformRequirements((prev) => {
+        const linked = prev.map((r) =>
+          r.id === requirementId
+            ? {
+                ...r,
+                linkedTaskIds: [...new Set([...r.linkedTaskIds, ...newTaskIds])],
+                status: r.status === 'approved' ? ('decomposed' as const) : r.status,
+              }
+            : r,
+        )
+        return syncRequirementsByTasks(linked, allTasks)
+      })
+    }
+
     return (
-      <div className="space-y-4">
-        <div className="rounded-xl border border-dashed border-primary/30 bg-primary/[0.03] px-4 py-3 text-sm text-text-secondary">
-          <span className="font-medium text-text">任务拆解：</span>
-          左侧选择待拆解需求，中间按约束生成任务单元并支持复制/批量编辑，右侧点选资源和时间窗即时指派。
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-          <section className="rounded-xl border border-border bg-card shadow-sm">
-            <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-              <h2 className="text-sm font-semibold text-text">待拆解需求池</h2>
-              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-xs text-text-secondary">
-                {decomposableRequirements.length}
-              </span>
-            </header>
-            <ul className="max-h-[520px] divide-y divide-border overflow-y-auto">
-              {decomposableRequirements.length === 0 && (
-                <li className="px-4 py-6 text-center text-sm text-text-secondary">
-                  暂无待拆解需求
-                </li>
-              )}
-              {decomposableRequirements.map((r) => {
-                const sel = r.id === selectedReqId
-                const taskCount = r.linkedTaskIds.length
-                return (
-                  <li key={r.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedReqId(r.id)}
-                      className={cn(
-                        'flex w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors',
-                        sel ? 'bg-primary/5' : 'hover:bg-slate-50',
-                      )}
-                    >
-                      <div className="flex w-full items-center gap-2">
-                        <span
-                          className={cn(
-                            'inline-flex shrink-0 rounded-md px-1 text-[10px] font-semibold ring-1 ring-inset',
-                            priorityPillClass(
-                              r.priority === 'P0'
-                                ? 'high'
-                                : r.priority === 'P1'
-                                  ? 'medium'
-                                  : 'low',
-                            ),
-                          )}
-                        >
-                          {r.priority}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
-                          {r.title}
-                        </span>
-                      </div>
-                      <p className="flex w-full items-center gap-2 text-xs text-text-secondary">
-                        <span className="font-mono">{r.id}</span>
-                        <span>·</span>
-                        <span className="truncate">{r.requirementGroup}</span>
-                      </p>
-                      <div className="flex w-full items-center justify-end text-[11px] text-text-secondary">
-                        <span className="tabular-nums">已拆 {taskCount} 个任务</span>
-                      </div>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-
-          <section className="flex min-h-[520px] flex-col gap-4">
-            {selectedRequirement === null ? (
-              <div className="flex flex-1 items-center justify-center rounded-xl border border-border bg-card text-sm text-text-secondary">
-                请从左侧选择一条需求进行拆解
-              </div>
-            ) : (
-              <>
-                <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={cn(
-                            'inline-flex rounded-md px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset',
-                            priorityPillClass(
-                              selectedRequirement.priority === 'P0'
-                                ? 'high'
-                                : selectedRequirement.priority === 'P1'
-                                  ? 'medium'
-                                  : 'low',
-                            ),
-                          )}
-                        >
-                          {selectedRequirement.priority}
-                        </span>
-                        <h3 className="text-base font-semibold text-text">{selectedRequirement.title}</h3>
-                      </div>
-                      <p className="mt-0.5 text-xs text-text-secondary">
-                        {selectedRequirement.id} · {selectedRequirement.requirementGroup} · 需求方 {selectedRequirement.owner}
-                      </p>
-                    </div>
-                    <div className="text-right text-xs text-text-secondary">
-                      <p>目标 <span className="font-semibold text-text">{selectedRequirement.targetValue}</span></p>
-                      <p>交付 {selectedRequirement.deliveryDate}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3">
-                    <p className="text-xs font-medium text-text-secondary">拆解规则说明</p>
-                    <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-xs text-text-secondary">
-                      <li>系统按需求约束（关键约束/目标类型）生成多条任务单元草案。</li>
-                      <li>中间面板可复制任务单元、批量改优先级、微调任务类型。</li>
-                      <li>右侧按三步向导：①资源指派 → ②台本配置（AI/人工）→ ③确认绑定。</li>
-                    </ol>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <h4 className="flex items-center gap-2 text-sm font-semibold text-text">
-                      <GitBranch className="size-4 text-primary" strokeWidth={1.75} aria-hidden />
-                      任务拆解面板（草案 {decompositionDrafts.length}）
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={generateDraftUnitsFromRequirement}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/[0.06] px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/[0.12]"
-                      >
-                        <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
-                        按约束生成任务单元
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => batchSetPriority('high')}
-                        className="rounded-md border border-border px-2.5 py-1 text-xs text-text hover:bg-slate-50"
-                      >
-                        批量改为高优先级
-                      </button>
-                      <button
-                        type="button"
-                        onClick={commitDraftUnitsToTasks}
-                        className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800"
-                      >
-                        生成任务单元
-                      </button>
-                    </div>
-                  </div>
-                  {decompositionMessage && (
-                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
-                      {decompositionMessage}
-                    </div>
-                  )}
-                  {decompositionDrafts.length === 0 ? (
-                    <p className="rounded-lg border border-dashed border-border bg-white/60 px-4 py-6 text-center text-sm text-text-secondary">
-                      先点击“按约束生成任务单元”，系统会把需求拆解成可编辑任务草案。
-                    </p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {decompositionDrafts.map((unit) => (
-                        <li
-                          key={unit.id}
-                          className={cn(
-                            'rounded-lg border bg-white/80 p-3',
-                            activeDraftId === unit.id ? 'border-primary ring-1 ring-primary/20' : 'border-border',
-                          )}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={unit.selected}
-                                onChange={() => toggleDraftSelection(unit.id)}
-                                className="size-3.5"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setActiveDraftId(unit.id)}
-                                className="font-mono text-xs font-semibold text-primary hover:underline"
-                              >
-                                {unit.id}
-                              </button>
-                              <span className={cn('inline-flex rounded-md px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset', priorityPillClass(unit.priority))}>
-                                {PRIORITY_LABEL[unit.priority]}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => copyDraftUnit(unit.id)}
-                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-text hover:bg-slate-50"
-                            >
-                              <Copy className="size-3.5" strokeWidth={1.75} aria-hidden />
-                              复制
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeDraftUnit(unit.id)}
-                              className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-100"
-                            >
-                              <X className="size-3.5" strokeWidth={1.75} aria-hidden />
-                              删除
-                            </button>
-                          </div>
-                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                            <input
-                              value={unit.type}
-                              onChange={(e) => updateDraftUnit(unit.id, { type: e.target.value })}
-                              className="h-8 rounded-md border border-border px-2 text-xs"
-                              placeholder="任务类型"
-                            />
-                            <select
-                              value={unit.priority}
-                              onChange={(e) => updateDraftUnit(unit.id, { priority: e.target.value as TaskPriority })}
-                              className="h-8 rounded-md border border-border px-2 text-xs"
-                            >
-                              <option value="high">高优先级</option>
-                              <option value="medium">中优先级</option>
-                              <option value="low">低优先级</option>
-                            </select>
-                            <input
-                              value={unit.startTime}
-                              onChange={(e) => updateDraftUnit(unit.id, { startTime: e.target.value })}
-                              type="datetime-local"
-                              className="h-8 rounded-md border border-border px-2 text-xs"
-                            />
-                            <input
-                              value={unit.endTime}
-                              onChange={(e) => updateDraftUnit(unit.id, { endTime: e.target.value })}
-                              type="datetime-local"
-                              className="h-8 rounded-md border border-border px-2 text-xs"
-                            />
-                          </div>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {['遥操作采集', '动捕采集', '人体数据采集'].map((presetType) => (
-                              <button
-                                key={presetType}
-                                type="button"
-                                onClick={() => updateDraftUnit(unit.id, { type: presetType })}
-                                className={cn(
-                                  'rounded-md border px-2 py-0.5 text-[11px]',
-                                  unit.type.includes(presetType)
-                                    ? 'border-primary/40 bg-primary/10 text-primary'
-                                    : 'border-border bg-white text-text-secondary hover:bg-slate-50',
-                                )}
-                              >
-                                {presetType}
-                              </button>
-                            ))}
-                          </div>
-                          <p className="mt-1.5 text-[11px] text-text-secondary">
-                            人员 {unit.personnelId || '未指派'} · 设备 {unit.deviceId || '未指派'} · 场地 {unit.sceneId || '未指派'}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-                  <h4 className="mb-2 text-sm font-semibold text-text">已入库任务单元（{selectedReqTasks.length}）</h4>
-                  {selectedReqTasks.length === 0 ? (
-                    <p className="text-xs text-text-secondary">当前需求尚未生成正式任务单元。</p>
-                  ) : (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {selectedReqTasks.map((task) => (
-                        <button
-                          type="button"
-                          key={task.id}
-                          onClick={() => openTaskDetail(task)}
-                          className="rounded-md border border-border bg-white px-3 py-2 text-left text-xs hover:bg-slate-50"
-                        >
-                          <p className="font-mono font-semibold text-primary">{task.id}</p>
-                          <p className="mt-0.5 text-text-secondary">{task.type}</p>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-
-          <section className="space-y-4">
-            {activeDraft ? (
-              <div className="rounded-xl border border-border bg-card px-3 py-2.5 shadow-sm">
-                <p className="mb-2 text-[11px] font-medium text-text-secondary">拆解向导</p>
-                <div className="flex gap-1">
-                  {([
-                    [1, '① 资源指派'],
-                    [2, '② 台本配置'],
-                    [3, '③ 确认绑定'],
-                  ] as const).map(([step, label]) => (
-                    <button
-                      key={step}
-                      type="button"
-                      onClick={() => setDecompositionWizardStep(step)}
-                      className={cn(
-                        'flex-1 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors',
-                        decompositionWizardStep === step
-                          ? 'bg-primary text-white'
-                          : 'bg-slate-100 text-text-secondary hover:bg-slate-200',
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border bg-slate-50/50 p-4 text-xs text-text-secondary">
-                选中任务单元后，右侧按三步完成资源指派与台本绑定。
-              </div>
-            )}
-
-            {activeDraft && decompositionWizardStep >= 2 && (
-              <ScriptConfigPanel
-                taskId={activeDraft.id}
-                taskType={activeDraft.type || '人体数据采集'}
-                sceneId={activeDraft.sceneId}
-                scripts={taskScripts}
-                props={platformProps}
-                wizardStep={decompositionWizardStep === 2 ? 'configure' : 'confirm'}
-                onPropsChange={setPlatformProps}
-                onScriptsChange={setTaskScripts}
-                boundScriptId={activeDraft.scriptId || activeDraft.id}
-                onBindScript={(scriptTaskId) =>
-                  updateDraftUnit(activeDraft.id, { scriptId: scriptTaskId })
-                }
-                onConfigureComplete={() => setDecompositionWizardStep(3)}
-                onGoBack={() => setDecompositionWizardStep(2)}
-              />
-            )}
-
-            {activeDraft && decompositionWizardStep === 1 && (
-            <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-text">① 资源指派（4 类）</h3>
-            <p className="text-xs text-text-secondary">
-              先在中间勾选任务单元（可多选），再在此检索并点选资源或时间窗批量指派。
-            </p>
-            <div className="grid grid-cols-4 gap-1 rounded-md bg-slate-100 p-1">
-              {([
-                ['personnel', '人'],
-                ['device', '设备'],
-                ['scene', '场'],
-                ['window', '时间窗'],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setResourcePanelTab(key)}
-                  className={cn(
-                    'rounded px-2 py-1 text-xs font-medium transition-colors',
-                    resourcePanelTab === key
-                      ? 'bg-white text-primary shadow-sm'
-                      : 'text-text-secondary hover:text-text',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="space-y-2">
-              <input
-                value={resourceKeyword}
-                onChange={(e) => setResourceKeyword(e.target.value)}
-                placeholder={
-                  resourcePanelTab === 'personnel'
-                    ? '搜索姓名 / 角色'
-                    : resourcePanelTab === 'device'
-                      ? '搜索设备名 / 类型'
-                      : resourcePanelTab === 'scene'
-                        ? '搜索场景名 / 场景类型'
-                        : '搜索时间窗'
-                }
-                className="h-8 w-full rounded-md border border-border bg-white px-2.5 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-              />
-              {resourcePanelTab !== 'window' && (
-                <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={resourceOnlyAvailable}
-                    onChange={(e) => setResourceOnlyAvailable(e.target.checked)}
-                  />
-                  仅显示可用资源
-                </label>
-              )}
-            </div>
-
-            <div className="max-h-[1120px] space-y-1.5 overflow-y-auto pr-1">
-              {(() => {
-                const q = resourceKeyword.trim().toLowerCase()
-                if (resourcePanelTab === 'personnel') {
-                  const filtered = mockPersonnel
-                    .filter((person) => {
-                      if (resourceOnlyAvailable && person.status !== 'available') return false
-                      if (!q) return true
-                      return `${person.name} ${person.role}`.toLowerCase().includes(q)
-                    })
-                    .sort((a, b) => {
-                      if (a.status === b.status) return a.name.localeCompare(b.name)
-                      return a.status === 'available' ? -1 : 1
-                    })
-                  const shown = resourceShowAll ? filtered : filtered.slice(0, 8)
-                  return (
-                    <>
-                      {shown.map((person) => (
-                        <button
-                          key={person.id}
-                          type="button"
-                          onClick={() => assignResourceToDrafts('personnelId', person.id)}
-                          className="w-full rounded-md border border-border bg-white px-2.5 py-1.5 text-left text-xs hover:bg-slate-50"
-                        >
-                          <p className="font-medium text-text">{person.name}</p>
-                          <p className="text-text-secondary">
-                            {person.role} · {person.status === 'available' ? '可用' : '忙碌'}
-                          </p>
-                        </button>
-                      ))}
-                      {filtered.length > 8 && (
-                        <button
-                          type="button"
-                          onClick={() => setResourceShowAll((v) => !v)}
-                          className="w-full rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-text-secondary hover:bg-slate-50"
-                        >
-                          {resourceShowAll ? '收起列表' : `显示全部（${filtered.length}）`}
-                        </button>
-                      )}
-                    </>
-                  )
-                }
-                if (resourcePanelTab === 'device') {
-                  const filtered = mockDevices
-                    .filter((device) => {
-                      const available = device.status === 'available' && !['critical', 'maintenance'].includes(device.healthStatus)
-                      if (resourceOnlyAvailable && !available) return false
-                      if (!q) return true
-                      return `${device.name} ${device.type}`.toLowerCase().includes(q)
-                    })
-                    .sort((a, b) => {
-                      const sa = a.status === 'available' ? 0 : 1
-                      const sb = b.status === 'available' ? 0 : 1
-                      if (sa !== sb) return sa - sb
-                      return a.name.localeCompare(b.name)
-                    })
-                  const shown = resourceShowAll ? filtered : filtered.slice(0, 8)
-                  return (
-                    <>
-                      {shown.map((device) => (
-                        <button
-                          key={device.id}
-                          type="button"
-                          onClick={() => assignResourceToDrafts('deviceId', device.id)}
-                          className="w-full rounded-md border border-border bg-white px-2.5 py-1.5 text-left text-xs hover:bg-slate-50"
-                        >
-                          <p className="font-medium text-text">{device.name}</p>
-                          <p className="text-text-secondary">{device.type} · {device.healthStatus}</p>
-                        </button>
-                      ))}
-                      {filtered.length > 8 && (
-                        <button
-                          type="button"
-                          onClick={() => setResourceShowAll((v) => !v)}
-                          className="w-full rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-text-secondary hover:bg-slate-50"
-                        >
-                          {resourceShowAll ? '收起列表' : `显示全部（${filtered.length}）`}
-                        </button>
-                      )}
-                    </>
-                  )
-                }
-                if (resourcePanelTab === 'scene') {
-                  const filtered = mockScenes
-                    .filter((scene) => {
-                      if (resourceOnlyAvailable && scene.status !== 'active') return false
-                      if (!q) return true
-                      return `${scene.name} ${scene.type}`.toLowerCase().includes(q)
-                    })
-                    .sort((a, b) => {
-                      const sa = a.status === 'active' ? 0 : 1
-                      const sb = b.status === 'active' ? 0 : 1
-                      if (sa !== sb) return sa - sb
-                      return a.name.localeCompare(b.name)
-                    })
-                  const shown = resourceShowAll ? filtered : filtered.slice(0, 8)
-                  return (
-                    <>
-                      {shown.map((scene) => (
-                        <button
-                          key={scene.id}
-                          type="button"
-                          onClick={() => assignResourceToDrafts('sceneId', scene.id)}
-                          className="w-full rounded-md border border-border bg-white px-2.5 py-1.5 text-left text-xs hover:bg-slate-50"
-                        >
-                          <p className="font-medium text-text">{scene.name}</p>
-                          <p className="text-text-secondary">{scene.type} · {scene.status === 'active' ? '可用' : scene.status}</p>
-                        </button>
-                      ))}
-                      {filtered.length > 8 && (
-                        <button
-                          type="button"
-                          onClick={() => setResourceShowAll((v) => !v)}
-                          className="w-full rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-text-secondary hover:bg-slate-50"
-                        >
-                          {resourceShowAll ? '收起列表' : `显示全部（${filtered.length}）`}
-                        </button>
-                      )}
-                    </>
-                  )
-                }
-                const filtered = timeWindowOptions.filter((window) =>
-                  q === '' ? true : window.label.toLowerCase().includes(q),
-                )
-                return filtered.map((window) => (
-                  <button
-                    key={window.id}
-                    type="button"
-                    onClick={() => assignTimeWindowToDrafts(window.startTime, window.endTime)}
-                    className="w-full rounded-md border border-border bg-white px-2.5 py-1.5 text-left text-xs hover:bg-slate-50"
-                  >
-                    {window.label}
-                  </button>
-                ))
-              })()}
-            </div>
-            <button
-              type="button"
-              onClick={() => setDecompositionWizardStep(2)}
-              disabled={!activeDraft.sceneId}
-              className="mt-3 w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
-            >
-              下一步：台本配置
-            </button>
-            </div>
-            )}
-          </section>
-        </div>
-      </div>
+      <ScriptFirstDecomposition
+        decomposableRequirements={decomposableRequirements}
+        selectedReqId={selectedReqId}
+        onSelectRequirement={setSelectedReqId}
+        selectedRequirement={selectedRequirement}
+        taskScripts={taskScripts}
+        onTaskScriptsChange={setTaskScripts}
+        tasks={tasks}
+        onTasksChange={setTasks}
+        onRequirementsLinked={linkRequirementTasks}
+        selectedReqTasks={selectedReqTasks}
+      />
     )
   }
 
@@ -1562,6 +833,9 @@ export default function Tasks(): ReactElement {
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-text">{tabMeta.title}</h1>
         <p className="mt-1 text-sm text-text-secondary">{tabMeta.description}</p>
+        <p className="mt-1 text-xs text-text-secondary">
+          任务与台本数据保存在浏览器本地，与数据需求页共享；刷新后仍保留。
+        </p>
       </div>
 
       {activeTab === 'list' && (
@@ -1593,7 +867,7 @@ export default function Tasks(): ReactElement {
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-text">调度模式</h3>
                 <p className="mt-1 text-xs text-text-secondary">
-                  人 / 设备 / 场地已在「任务拆解」绑定。开启自动化后，系统将基于空闲状态动态生成排期建议（原型演示）；运营可随时人工覆盖。
+                  人 / 设备 / 场地在任务列表「资源编排」中绑定。仅资源就绪的任务可排期；开启自动化后将基于空闲状态生成排期建议。
                 </p>
               </div>
               <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-slate-50 px-3 py-2">
@@ -1867,12 +1141,83 @@ export default function Tasks(): ReactElement {
 
             <ReadinessDetailCard readiness={computeReadiness(detailTask, taskScripts)} />
 
-            {detailTask.sceneId === undefined || detailTask.sceneId === '' ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                「事」要素需先指派场景库后才能配置台本。请前往
-                <span className="font-medium"> 任务拆解 </span>
-                为该任务单元指派场地。
+            {taskNeedsResourceAssignment(detailTask) && (
+              <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-text">资源编排</h4>
+                  <p className="mt-0.5 text-xs text-text-secondary">
+                    任务内容（台本包）已确定。请指派人员、设备与场地，保存后可进入调度。
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="text-xs">
+                    场地 / 场景
+                    <select
+                      value={resourceDraft.sceneId}
+                      onChange={(e) =>
+                        setResourceDraft((d) => ({ ...d, sceneId: e.target.value }))
+                      }
+                      className="mt-1 block w-full rounded-md border border-border bg-white px-2 py-1.5 text-sm"
+                    >
+                      <option value="">请选择</option>
+                      {mockScenes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs">
+                    采集员
+                    <select
+                      value={resourceDraft.personnelId}
+                      onChange={(e) =>
+                        setResourceDraft((d) => ({ ...d, personnelId: e.target.value }))
+                      }
+                      className="mt-1 block w-full rounded-md border border-border bg-white px-2 py-1.5 text-sm"
+                    >
+                      <option value="">请选择</option>
+                      {mockPersonnel.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs">
+                    设备
+                    <select
+                      value={resourceDraft.deviceId}
+                      onChange={(e) =>
+                        setResourceDraft((d) => ({ ...d, deviceId: e.target.value }))
+                      }
+                      className="mt-1 block w-full rounded-md border border-border bg-white px-2 py-1.5 text-sm"
+                    >
+                      <option value="">请选择</option>
+                      {mockDevices.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => saveTaskResources(detailTask.id)}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+                >
+                  保存资源编排
+                </button>
               </div>
+            )}
+
+            {detailTask.sceneId === undefined || detailTask.sceneId === '' ? (
+              !taskNeedsResourceAssignment(detailTask) && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                「事」要素需先指派场景库后才能配置台本。请完成上方资源编排。
+              </div>
+              )
             ) : taskNeedsScriptBinding(detailTask) ? (
               <div className="space-y-3 rounded-lg border border-primary/25 bg-primary/[0.03] p-3">
                 <div>

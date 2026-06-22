@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 import fs from 'node:fs'
 import path from 'path'
 
+const pkg = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'),
+) as { version: string }
+
 function sanitizeApiKey(raw: string | undefined): string {
   if (!raw) return ''
   return raw.trim().replace(/^['"]|['"]$/g, '').replace(/[\r\n]/g, '')
@@ -53,6 +57,9 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
